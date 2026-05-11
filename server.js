@@ -336,7 +336,7 @@ async function getClaudeResponse(userMessage, phoneNumber) {
     console.log(`🧠 Chamando Claude para ${phoneNumber}...`);
     
     const response = await client.messages.create({
-      model: 'claude-3-5-sonnet-20241022',
+      model: 'claude-opus-4-1-20250805',
       max_tokens: 600,
       system: SYSTEM_PROMPT,
       messages: messages
@@ -432,7 +432,7 @@ app.get('/test-claude', async (req, res) => {
     }
     
     const response = await client.messages.create({
-      model: 'claude-3-5-sonnet-20241022',
+      model: 'claude-opus-4-1-20250805',
       max_tokens: 100,
       messages: [{
         role: 'user',
