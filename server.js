@@ -431,8 +431,11 @@ app.get('/test-claude', async (req, res) => {
       return res.status(400).json({ error: 'Claude não inicializado' });
     }
     
+    const modelo = 'claude-opus-4-1-20250805';
+    console.log(`🧪 Testando Claude com modelo: ${modelo}`);
+    
     const response = await client.messages.create({
-      model: 'claude-opus-4-1-20250805',
+      model: modelo,
       max_tokens: 100,
       messages: [{
         role: 'user',
@@ -440,10 +443,65 @@ app.get('/test-claude', async (req, res) => {
       }]
     });
     
-    res.json({ success: true, response: response.content[0].text });
+    res.json({ 
+      success: true, 
+      modelo_usado: modelo,
+      response: response.content[0].text 
+    });
   } catch (error) {
     res.status(500).json({
       success: false,
+      error: error.message,
+      type: error.constructor.name
+    });
+  }
+});
+
+/**
+ * Endpoint que mostra QUAL versão do código tá rodando
+ */
+app.get('/version', (req, res) => {
+  res.json({
+    versao: 'CARLOS v3.1 FINAL',
+    timestamp_build: new Date().toISOString(),
+    modelo_configurado: 'claude-opus-4-1-20250805',
+    sdk_anthropic: require('@anthropic-ai/sdk/package.json').version,
+    node_version: process.version,
+    uptime_segundos: Math.floor(process.uptime())
+  });
+});
+
+/**
+ * Endpoint para testar QUALQUER modelo (sem precisar redeploy)
+ * Uso: /test-model/claude-haiku-4-5-20251001
+ */
+app.get('/test-model/:nome', async (req, res) => {
+  try {
+    if (!client) {
+      return res.status(400).json({ error: 'Claude não inicializado' });
+    }
+    
+    const modelo = req.params.nome;
+    console.log(`🧪 Testando modelo via query: ${modelo}`);
+    
+    const response = await client.messages.create({
+      model: modelo,
+      max_tokens: 100,
+      messages: [{
+        role: 'user',
+        content: 'Diga "OK funcionando" em uma frase curta.'
+      }]
+    });
+    
+    res.json({ 
+      success: true,
+      modelo_usado: modelo,
+      response: response.content[0].text 
+    });
+  } catch (error) {
+    res.status(500).json({
+      success: false,
+      modelo_tentado: req.params.nome,
       error: error.message,
       type: error.constructor.name
     });
