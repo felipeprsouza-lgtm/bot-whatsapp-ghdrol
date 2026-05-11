@@ -45,11 +45,20 @@ if (!ZAPI_KEY || !ZAPI_INSTANCE || !CLAUDE_API_KEY) {
 }
 
 // CORREÇÃO IMPORTANTE: passar apiKey EXPLICITAMENTE
-const client = CLAUDE_API_KEY ? new Anthropic({
-  apiKey: CLAUDE_API_KEY
-}) : null;
-
-console.log(`Anthropic Client: ${client ? '✅ Inicializado' : '❌ Falha'}\n`);
+let client = null;
+try {
+  if (!CLAUDE_API_KEY) {
+    console.error('❌ CLAUDE_API_KEY está vazia!');
+  } else {
+    console.log(`📌 Inicializando Anthropic...`);
+    client = new Anthropic({
+      apiKey: CLAUDE_API_KEY
+    });
+    console.log(`✅ Anthropic Client inicializado!\n`);
+  }
+} catch (error) {
+  console.error(`❌ ERRO ao inicializar Anthropic:`, error.message);
+}
 
 // Memória de conversas
 const conversationMemory = {};
