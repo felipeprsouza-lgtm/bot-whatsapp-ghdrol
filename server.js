@@ -273,22 +273,25 @@ async function sendZapiMessage(phoneNumber, messageText) {
     console.log(`📤 Enviando Z-API:`);
     console.log(`   URL: ${url.substring(0, 80)}...`);
     console.log(`   Para: ${phoneNumber}`);
+    console.log(`   Mensagem: ${messageText.substring(0, 60)}...`);
     
     const response = await axios.post(url, {
       phone: phoneNumber,
       message: messageText
     }, {
       headers: {
-        'Content-Type': 'application/json',
-        'Client-Token': ZAPI_KEY
+        'Content-Type': 'application/json'
       }
     });
     
-    console.log(`✅ Enviado para ${phoneNumber}`);
+    console.log(`✅ Enviado com sucesso para ${phoneNumber}`);
+    console.log(`   Resposta Z-API:`, JSON.stringify(response.data));
     return response.data;
   } catch (error) {
-    console.error(`❌ Erro Z-API:`, error.response?.data || error.message);
+    console.error(`❌ Erro Z-API:`);
     console.error(`   Status: ${error.response?.status}`);
+    console.error(`   Data:`, JSON.stringify(error.response?.data));
+    console.error(`   Phone: ${phoneNumber}`);
     throw error;
   }
 }
