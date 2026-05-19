@@ -1,6 +1,7 @@
 // ================================================================
-// CARLOS v7.0 - BOT WHATSAPP GHDROL - VERSÃO FINAL
+// CARLOS v7.0 - BOT WHATSAPP GHDROL - VERSÃO FINAL + MANUAL MODE
 // Alinhado 100% com HTML | Garantia 60 dias | Bônus destacado
+// Owner pode responder manualmente - bot pausa automaticamente
 // ================================================================
 
 const express = require('express');
@@ -30,6 +31,11 @@ const userLocks = new Map();
 const lastSeen = new Map();
 const userContext = new Map();
 
+// ===== MANUAL MODE - Owner responder sem bot interferir =====
+const ownerManualMode = new Map(); // { phone -> { active: true, until: timestamp } }
+const OWNER_NUMBER = '5515997117956'; // SEU NÚMERO AQUI
+const MANUAL_MODE_DURATION = 30 * 60 * 1000; // 30 minutos
+
 function getHistory(phone) {
   if (!conversationMemory.has(phone)) conversationMemory.set(phone, []);
   return conversationMemory.get(phone);
@@ -40,6 +46,18 @@ function addToHistory(phone, role, content) {
   history.push({ role, content });
   if (history.length > 16) history.splice(0, history.length - 16);
   lastSeen.set(phone, Date.now());
+}
+
+// ===== Verificar se owner está em manual mode =====
+function isOwnerInManualMode(phone) {
+  if (!ownerManualMode.has(phone)) return false;
+  const mode = ownerManualMode.get(phone);
+  if (Date.now() > mode.until) {
+    ownerManualMode.delete(phone);
+    console.log(`✅ Manual mode expirou para ${phone}`);
+    return false;
+  }
+  return mode.active;
 }
 
 setInterval(() => {
@@ -325,6 +343,12 @@ async function sendZapiMessage(phone, message) {
 }
 
 async function processarMensagem(phone, message) {
+  // 🔴 VERIFICAÇÃO: Se owner está respondendo manualmente, bot fica silencioso
+  if (isOwnerInManualMode(phone)) {
+    console.log(`⏸️  PAUSA ATIVA: ${phone} - Felipe respondendo manualmente. Bot silencioso.`);
+    return; // Encerra aqui, não chama Claude
+  }
+
   if (userLocks.get(phone)) {
     let espera = 0;
     while (userLocks.get(phone) && espera < 20000) {
@@ -383,14 +407,14 @@ function captureTracking(phone, message) {
 }
 
 app.get('/', (req, res) => res.json({
-  status: 'online', version: '7.0', bot: 'Carlos GHDROL',
+  status: 'online', version: '7.0-manual', bot: 'Carlos GHDROL',
   garantia: '60 dias', kits: 4,
-  stats: { conversas: conversationMemory.size, processando: userLocks.size }
+  stats: { conversas: conversationMemory.size, processando: userLocks.size, manualModeActive: isOwnerInManualMode(OWNER_NUMBER) }
 }));
 
 app.get('/health', (req, res) => {
   const healthy = !!(ZAPI_KEY && ZAPI_INSTANCE && ZAPI_CLIENT_TOKEN && CLAUDE_API_KEY);
-  res.json({ status: healthy ? 'healthy' : 'unhealthy', version: '7.0' });
+  res.json({ status: healthy ? 'healthy' : 'unhealthy', version: '7.0-manual' });
 });
 
 app.get('/debug-config', (req, res) => res.json({
@@ -398,12 +422,13 @@ app.get('/debug-config', (req, res) => res.json({
   ZAPI_INSTANCE: ZAPI_INSTANCE ? 'OK' : 'MISSING',
   ZAPI_CLIENT_TOKEN: ZAPI_CLIENT_TOKEN ? 'OK' : '❌',
   CLAUDE_API_KEY: CLAUDE_API_KEY ? 'OK' : 'MISSING',
+  OWNER_NUMBER,
   KIT_LINKS
 }));
 
 app.get('/test-zapi', async (req, res) => {
   try {
-    const result = await sendZapiMessage('5515997117956', '🧪 Teste v7.0');
+    const result = await sendZapiMessage('5515997117956', '🧪 Teste v7.0-manual');
     res.json({ success: true, result });
   } catch (e) { res.json({ success: false, error: e.message }); }
 });
@@ -421,7 +446,8 @@ app.get('/test-claude', async (req, res) => {
 app.get('/stats', (req, res) => res.json({
   conversas: conversationMemory.size,
   processando: Array.from(userLocks.keys()),
-  tracking: Array.from(userContext.entries()).map(([p, c]) => ({ phone: p, ctx: c }))
+  tracking: Array.from(userContext.entries()).map(([p, c]) => ({ phone: p, ctx: c })),
+  ownerManualMode: isOwnerInManualMode(OWNER_NUMBER) ? '🔴 ATIVO (pausa 30 min)' : '✅ Inativo (bot normal)'
 }));
 
 app.post('/reset/:phone', (req, res) => {
@@ -437,9 +463,45 @@ app.get('/test-link/:kit/:phone', (req, res) => {
   res.json({ link: buildKitLink(parseInt(req.params.kit), req.params.phone) });
 });
 
+// ===== ROUTES DE MANUAL MODE =====
+
+app.get('/owner-manual-on', (req, res) => {
+  const until = Date.now() + MANUAL_MODE_DURATION;
+  ownerManualMode.set(OWNER_NUMBER, { active: true, until });
+  console.log(`🔴 MANUAL MODE ATIVADO - ${OWNER_NUMBER} pode responder manualmente por 30 min`);
+  res.json({
+    success: true,
+    message: '🔴 Bot em pausa - você pode responder manualmente por 30 minutos',
+    owner: OWNER_NUMBER,
+    expiresIn: '30 minutos',
+    until: new Date(until).toISOString()
+  });
+});
+
+app.get('/owner-manual-off', (req, res) => {
+  ownerManualMode.delete(OWNER_NUMBER);
+  console.log(`✅ MANUAL MODE DESATIVADO - Bot volta normal`);
+  res.json({
+    success: true,
+    message: '✅ Bot voltando ao normal',
+    status: 'ativo'
+  });
+});
+
+app.get('/owner-manual-status', (req, res) => {
+  const isActive = isOwnerInManualMode(OWNER_NUMBER);
+  const mode = ownerManualMode.get(OWNER_NUMBER);
+  res.json({
+    active: isActive,
+    expiresAt: mode ? new Date(mode.until).toISOString() : null,
+    owner: OWNER_NUMBER,
+    timeRemaining: mode && isActive ? Math.floor((mode.until - Date.now()) / 1000 / 60) + ' min' : 'N/A'
+  });
+});
+
 app.get('/version', (req, res) => res.json({
-  version: '7.0',
-  fixes: [
+  version: '7.0-manual',
+  features: [
     '✅ Garantia 60 dias',
     '✅ Bônus destacado',
     '✅ Composição completa (B6)',
@@ -447,16 +509,33 @@ app.get('/version', (req, res) => res.json({
     '✅ Detalhe checkout Braip',
     '✅ Compliance ANVISA',
     '✅ Triagem segurança',
-    '✅ Funil 5 estágios'
-  ]
+    '✅ Funil 5 estágios',
+    '✅ NOVO: Manual Mode - Owner responde sem bot'
+  ],
+  manualMode: {
+    enabled: true,
+    ownerNumber: OWNER_NUMBER,
+    pauseDuration: '30 minutos',
+    routes: [
+      'GET /owner-manual-on   → Ativa pausa',
+      'GET /owner-manual-off  → Desativa pausa',
+      'GET /owner-manual-status → Verifica status'
+    ]
+  }
 }));
 
 app.listen(PORT, () => {
   console.log('╔════════════════════════════════════════╗');
-  console.log('║  🤖 CARLOS v7.0 - FINAL                ║');
+  console.log('║  🤖 CARLOS v7.0-MANUAL - FINAL         ║');
   console.log('║  ✅ Garantia 60 dias                   ║');
   console.log('║  ✅ Bônus destacado                    ║');
   console.log('║  ✅ Alinhado com HTML                  ║');
+  console.log('║  ✅ Manual Mode - Owner responde       ║');
   console.log(`║  Porta: ${PORT}                          ║`);
+  console.log('║                                        ║');
+  console.log('║  ROUTES:                               ║');
+  console.log('║  GET /owner-manual-on   → Pausa bot    ║');
+  console.log('║  GET /owner-manual-off  → Ativa bot    ║');
+  console.log('║  GET /owner-manual-status → Verifica   ║');
   console.log('╚════════════════════════════════════════╝');
 });
