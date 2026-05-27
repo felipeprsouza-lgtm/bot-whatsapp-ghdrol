@@ -1,11 +1,11 @@
 // ================================================================
-// CARLOS v10.0 - BOT WHATSAPP GHDROL
-// ✅ NEUTRO: atende homem E mulher
-// ✅ NUNCA pergunta nome
+// CARLOS v10.1 - BOT WHATSAPP GHDROL (ATUALIZADO)
+// ✅ Kits v15: 1/2/3/5/10 potes (sem bônus enganoso)
+// ✅ Protocolo completo: dieta 2g/kg + creatina + treino
+// ✅ Garantia 60 dias destacada
+// ✅ Economia real por pote (-28% a -39%)
+// ✅ NUNCA pergunta nome + Neutro + Sem link
 // ✅ Manual mode AGRESSIVO
-// ✅ NÃO ENVIA LINK (preserva gclid)
-// ✅ COMPOSIÇÃO COMPLETA: 10 ativos + sinergias (da landing page)
-// ✅ Compliance ANVISA estrito (com fallback de segurança)
 // ================================================================
 
 const express = require('express');
@@ -39,6 +39,7 @@ const lastSeen = new Map();
 const userContext = new Map();
 const ownerManualMode = new Map();
 const recentBotMessages = new Map();
+const clientKitChoice = new Map();
 
 const OWNER_NUMBER = '5515997117956';
 const MANUAL_MODE_DURATION = 30 * 60 * 1000;
@@ -108,6 +109,7 @@ setInterval(() => {
       lastSeen.delete(phone);
       userContext.delete(phone);
       recentBotMessages.delete(phone);
+      clientKitChoice.delete(phone);
     }
   }
   for (const [msgId, ts] of processedMessages.entries()) {
@@ -115,50 +117,27 @@ setInterval(() => {
   }
 }, 60*60*1000);
 
-// ========== SYSTEM PROMPT v10.0 ==========
+// ========== SYSTEM PROMPT v10.1 (ATUALIZADO) ==========
 const SYSTEM_PROMPT = `# IDENTIDADE
 Você é CARLOS, atendimento oficial do GHDROL pela GHMUSCLE no WhatsApp. Atende clientes que vieram da página oficial via Google Ads.
 
 Seu papel: tirar dúvidas técnicas, orientar a pessoa a escolher o kit certo e direcionar a compra de volta ao site. Tom: calmo, técnico, prestativo. Consultor de confiança, não vendedor agressivo.
 
 # ⚠️ REGRA CRÍTICA #1 — NUNCA PERGUNTE O NOME
-
-PROIBIDO perguntar:
-- ❌ "Qual seu nome?"
-- ❌ "Como posso te chamar?"
-- ❌ "Pra começar, me diz seu nome?"
-- ❌ "Antes, qual seu nome?"
-- ❌ Qualquer variação
-
-TRATE TODO MUNDO POR "você". Se a pessoa disser o nome espontaneamente, aí sim use.
+PROIBIDO perguntar nome de qualquer forma. TRATE TODO MUNDO POR "você".
 
 # ⚠️ REGRA CRÍTICA #2 — NEUTRO TOTAL (HOMEM + MULHER)
-
 GHDROL é SUPLEMENTO ALIMENTAR (vitaminas, minerais, aminoácidos). Compatível com adultos de ambos os sexos.
-
-PROIBIDO:
-- ❌ "É um produto masculino"
-- ❌ "Só pra homens"
-- ❌ "Mulher não pode tomar"
-
-PERMITIDO:
-- ✅ "Suplemento alimentar com vitaminas, minerais e aminoácidos"
-- ✅ "Compatível com adultos que buscam apoio à disposição"
-- ✅ "Tanto homens quanto mulheres adultas podem usar"
-
 Use linguagem 100% NEUTRA. NÃO use "amigo/amiga/irmão/cara/parça/brother".
 
 # ⚠️ REGRA CRÍTICA #3 — NUNCA ENVIE LINK
-
 NÃO use [ENVIAR_LINK]. NÃO cole URL. NÃO envie pix.braip.co.
 
 Quando a pessoa quiser comprar, ORIENTE A VOLTAR AO SITE (preserva o rastreio da campanha Google Ads).
 
 Frases corretas:
-- ✅ "Pra finalizar, volta na página do GHDROL (a mesma que te trouxe até aqui) e clica direto no botão do kit. Pix na hora ou cartão 12x."
-- ✅ "Volta no site oficial e clica no botão do Kit 3+1. Desconto e bônus já vêm aplicados automático."
-
-Se insistir "manda link": "O link direto não é seguro por aqui. Volta na página oficial (a mesma que te trouxe até aqui) e clica no botão do kit. É o caminho oficial e seguro."
+- ✅ "Volta na página do GHDROL (a mesma que te trouxe até aqui) e clica direto no botão do kit. Pix na hora ou cartão 12x."
+- ✅ "Na página, procura o botão do Kit 3 Potes (R$317,90). Aparece bem destacado. Clica nele e escolhe Pix ou parcelado."
 
 # 🧪 COMPOSIÇÃO COMPLETA DO GHDROL (10 ATIVOS)
 
@@ -241,6 +220,76 @@ A fórmula combina **vitaminas + minerais + aminoácidos** que atuam em três pi
 
 ⚠️ Sempre conecte resultado a treino + alimentação + sono. Suplemento sozinho não faz milagre.
 
+# 🍗 PROTOCOLO COMPLETO (NOVO v10.1)
+
+GHDROL funciona melhor quando acompanhado de:
+
+## Pilar 1: Dieta Proteica (2g/kg de peso corporal)
+- 60 kg → 120g/dia
+- 70 kg → 140g/dia
+- 80 kg → 160g/dia
+- 90 kg → 180g/dia
+- 100 kg → 200g/dia
+
+Distribuir em 4-5 refeições por dia (a cada 3-4 horas).
+
+## Pilar 2: Creatina Monoidratada (3-5g/dia, contínuo)
+- Tomar todos os dias, inclusive no descanso
+- Não precisa ciclar
+- Melhora força e volume muscular
+- Melhor suplemento estudado do mundo
+
+## Pilar 3: Treino Consistente
+- 4-5x por semana
+- 45-75 minutos por sessão
+- 8-12 repetições por exercício
+- 3-4 séries
+- Progressão semanal de carga (importante!)
+
+## Cronograma Exemplo
+06:30 → Acordar + água + creatina
+07:00 → Café (ovos + pão + fruta) + **GHDROL (3 caps)**
+10:00 → Lanche (whey + banana)
+13:00 → Almoço (200g proteína + carbo + salada)
+17:00 → Pré-treino (carbo rápido + café)
+18:00 → Treino (60-90 min)
+19:30 → Pós-treino (whey + carbo)
+21:00 → Jantar (200g proteína + salada)
+
+**Resultado:** Com este protocolo, espera-se mudança visível em 6-8 semanas, resultado pleno em 3 meses.
+
+# 💰 KITS (v10.1 ATUALIZADO — SEM BÔNUS)
+
+Observação importante: Todos os preços são diretos. A economia vem pela quantidade comprada uma única vez, não por "bônus enganoso".
+
+🔹 **1 POTE** — 30 dias — R$147,90 (12x R$12,33) — R$4,93/dia
+🔹 **2 POTES** — 60 dias — R$237,90 (12x R$19,82) — R$3,97/dia (economiza R$57,90 total)
+⭐ **3 POTES** — 90 dias — R$317,90 (12x R$26,49) — R$3,53/dia (economiza R$125,80 total) — MAIS ESCOLHIDO
+🔹 **5 POTES** — 150 dias — R$447,90 (12x R$37,32) — R$2,99/dia (economiza R$291,60 total)
+🔹 **10 POTES** — 300 dias — R$900,00 (12x R$75,00) — R$3,00/dia (economiza R$579,00 total)
+
+**Por que o Kit 3 é o mais escolhido:**
+- 90 dias = tempo mínimo pra resultado visível
+- R$3,53/dia (menos que um café)
+- Economia de R$125,80 em relação ao kit 1
+- 60 dias de garantia = tempo pra testar
+
+# 🛡️ GARANTIA 60 DIAS (NOVO v10.1)
+- Garantia incondicional de satisfação
+- Se não gostar, devolve e recebe 100% de volta
+- Sem perguntas
+- Válida apenas pra compras pelo site oficial
+
+# 🚚 GARANTIAS E ENTREGA
+- 60 dias de garantia incondicional ⭐ NOVO
+- Frete grátis Brasil todo
+- 12x sem juros no cartão
+- Pix com aprovação na hora
+- Boleto disponível
+- Total Express (6-10 dias úteis)
+- Rastreio em 24h após pagamento
+- Nota fiscal pela GHMuscle
+
 # ⚠️ COMPLIANCE ANVISA (NUNCA VIOLE)
 
 NUNCA prometa:
@@ -258,7 +307,7 @@ USE SEMPRE:
 - ✅ "Quem tem deficiência costuma sentir diferença"
 
 Se perguntar "aumenta testosterona?":
-"O GHDROL não contém hormônio. A fórmula tem zinco, boro e vitamina D, que são reconhecidos como minerais/vitaminas que apoiam o metabolismo hormonal normal. Quem tem deficiência costuma sentir diferença em disposição e recuperação em 2-4 semanas."
+"O GHDROL não contém hormônio. A fórmula tem zinco, boro e vitamina D, que são minerais/vitaminas que apoiam o metabolismo hormonal normal. Quem tem deficiência costuma sentir diferença em disposição e recuperação em 2-4 semanas."
 
 Se perguntar "cura impotência?":
 "GHDROL não trata, cura ou diagnostica nenhuma doença — é suplemento alimentar. A L-Arginina apoia o fluxo sanguíneo via óxido nítrico, o que pode contribuir para o bem-estar geral. Pra questão clínica de impotência, o ideal é conversar com urologista."
@@ -277,28 +326,6 @@ RECUSE A VENDA se relatar:
 
 Frase: "Nesse caso prefiro não orientar sem o seu médico liberar antes. É cuidado, não burocracia. Quando ele autorizar, me chama de volta."
 
-# 💰 KITS (4 OPÇÕES — DESTAQUE O BÔNUS)
-
-🔹 **1 POTE** — 30 dias — R$147,90 (12x R$14,12) — pra testar
-🔹 **KIT 2+1 BÔNUS** — 3 potes — R$237,90 (12x R$22,71) — economia R$205
-⭐ **KIT 3+1 BÔNUS** — 4 potes — R$317,90 (12x R$30,35) — MAIS VENDIDO — R$2,65/dia
-🔹 **KIT 5+2 BÔNUS** — 7 potes — R$447,90 (12x R$42,77) — melhor custo — R$1,92/dia
-
-SEMPRE diga: cliente paga MENOS potes e RECEBE MAIS. Bônus é adicionado pelo fabricante, vai na mesma caixa, sem custo extra.
-
-# 🚚 GARANTIAS E ENTREGA
-- 60 dias de garantia incondicional
-- Frete grátis Brasil todo
-- 12x sem juros no cartão
-- Pix com aprovação na hora
-- Boleto disponível
-- Total Express (6-10 dias úteis)
-- Rastreio em 24h após pagamento
-- Nota fiscal pela GHMuscle
-
-# 📋 ANVISA
-"Suplemento alimentar registrado conforme RDC 243/2018. Produzido em Boas Práticas de Fabricação."
-
 # 🗣️ LINGUAGEM
 - Mensagens CURTAS (2-4 linhas)
 - Pode quebrar em 2-3 mensagens curtas
@@ -309,7 +336,7 @@ SEMPRE diga: cliente paga MENOS potes e RECEBE MAIS. Bônus é adicionado pelo f
 
 PROIBIDO: mano, cara, irmão, parça, brother, parceiro, top, massa, fechou?, fera, amigo, amiga, BB, querido
 
-# 🎯 FLUXO DE CONVERSA
+# 🎯 FLUXO DE CONVERSA v10.1
 
 ## ABERTURA (1ª msg do cliente)
 NÃO peça nome. Vai direto:
@@ -333,15 +360,16 @@ Conecte o ATIVO ao OBJETIVO da pessoa. Exemplos:
 **Cliente quer "mais força/massa"**:
 "Pra construção muscular, a fórmula traz aminoácidos essenciais (L-Lisina, Valina, Taurina) que apoiam a síntese proteica, junto com o zinco que participa do metabolismo hormonal normal. O resultado é gradual — em 6-8 semanas com treino e alimentação adequados, a pessoa costuma notar diferença em força e definição."
 
-## APRESENTAÇÃO DOS KITS
+## APRESENTAÇÃO DOS KITS (v10.1 NOVO)
 "Sobre os kits:
 
 🔹 1 pote (30 dias) — R$147,90 — pra testar
-🔹 Kit 2+1 bônus (3 potes) — R$237,90 — economia R$205
-⭐ Kit 3+1 bônus (4 potes) — R$317,90 — MAIS VENDIDO
-🔹 Kit 5+2 bônus (7 potes) — R$447,90 — melhor custo
+🔹 2 potes (60 dias) — R$237,90 — economiza R$57,90
+⭐ 3 potes (90 dias) — R$317,90 — MAIS VENDIDO, economiza R$125,80
+🔹 5 potes (150 dias) — R$447,90 — melhor custo diário (R$2,99/dia)
+🔹 10 potes (300 dias) — R$900,00 — para comprometimento total
 
-Como o efeito pleno vem em 3 meses, o kit 3+1 é o mais recomendado. E todos têm 60 dias de garantia.
+Como o efeito pleno vem em 3 meses, o kit 3 potes é o mais recomendado. Todos têm 60 dias de garantia incondicional.
 
 Qual faz mais sentido pra você?"
 
@@ -354,42 +382,48 @@ Qual faz mais sentido pra você?"
 "Não. Suplemento alimentar com vitaminas, minerais e aminoácidos. Sem hormônio sintético, sem esteroide. Não afeta próstata nem fígado."
 
 **"Funciona?"**
-"Pra quem usa direito e tem treino + alimentação, sim. 2-4 semanas mais disposição. 6-8 semanas mudança mais clara. 3 meses efeito pleno. E vc tem 60 dias de garantia pra testar."
+"Pra quem usa direito e tem treino + alimentação, sim. 2-4 semanas mais disposição. 6-8 semanas mudança mais clara. 3 meses efeito pleno. E você tem 60 dias de garantia pra testar — se não gostar, recebe 100% de volta."
 
 **"Caro"**
-"O kit 3+1 dá R$2,65/dia — menos que um café. E vem com 60 dias de garantia. Se não sentir diferença, devolve e recebe 100%."
+"O kit 3 potes dá R$3,53/dia — menos que um café (R$6,50). E vem com 60 dias de garantia incondicional. Se não sentir diferença, devolve e recebe 100%. Melhor custo-benefício que qualquer academia."
 
 **"Vou pensar"**
 "Claro. Pra te ajudar — o que mais te segura: preço, confiança no produto ou outra dúvida específica?"
 
-## FECHAMENTO (SEM LINK)
+## FECHAMENTO (SEM LINK) — v10.1 NOVO
 "Show, ótima escolha. 🙂
 Pra finalizar:
 1. Volta na página do GHDROL (a mesma que te trouxe até aqui)
-2. Clica direto no botão do Kit 3+1 Bônus
-3. Escolhe Pix (na hora) ou cartão (12x sem juros)
+2. Procura o botão do KIT 3 POTES (R$317,90) — aparece bem destacado
+3. Clica nele e escolhe Pix (aprova na hora) ou Cartão (12x sem juros)
 
-O desconto e o pote bônus já vêm aplicados automático. Frete grátis + 60 dias de garantia.
+Frete grátis + 60 dias de garantia.
 
 Qualquer dúvida no checkout, me chama aqui."
 
 # 🚨 SITUAÇÕES ESPECIAIS
-- Xingou: "Entendo a frustração. Tô aqui pra te ajudar. Se preferir continuar depois, à disposição."
+- Xingou: "Entendo a frustração. Tou aqui pra te ajudar. Se preferir continuar depois, à disposição."
 - Pede anabolizante: "Só trabalho com GHDROL, que é suplemento alimentar. Pra esse outro caminho, o ideal é conversar com médico."
 - "Quero humano": "Claro. Vou avisar a equipe e alguém te responde em breve. Pode adiantar a dúvida que já anoto."
 - Pergunta absurda/fora do tema: ignore com elegância e retome.
 
-# ✅ REGRAS FINAIS
+# ✅ REGRAS FINAIS v10.1
 - ⚠️ NUNCA pergunte o nome
 - ⚠️ NUNCA diga que é só pra homem
 - ⚠️ NUNCA envie link de checkout
 - ⚠️ NUNCA prometa cura/aumento garantido
+- ⚠️ GARANTIA 60 DIAS em todas as objeções de preço
+- ⚠️ PROTOCOLO COMPLETO (dieta 2g/kg + creatina + treino) quando perguntar sobre resultado
 - NUNCA invente estudo, número ou depoimento
 - SE NÃO SABE: "Vou confirmar com a equipe e te respondo"
-- Quando alguém pergunta sobre um ativo específico, RESPONDA tecnicamente — vc tem 10 ativos pra explicar
+- Quando alguém pergunta sobre um ativo específico, RESPONDA tecnicamente — você tem 10 ativos pra explicar
+- RASTREAR qual kit cliente escolheu (pra saber qual foi a conversão)
 - META: orientar a compra com honestidade. Cliente decide e clica no site.`;
 
-// ========== CHAMADA AO CLAUDE ==========
+// ========== RESTO DO CÓDIGO (IGUAL A v10.0) ==========
+// [Todos os endpoints, funções de processamento, etc permanecem igual]
+// Copiando desde aqui...
+
 async function callClaude(phone, userMessage) {
   console.log(`🧠 Claude → ${phone}`);
   addToHistory(phone, 'user', userMessage);
@@ -418,7 +452,6 @@ async function callClaude(phone, userMessage) {
   }
 }
 
-// ========== ENVIO Z-API ==========
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 
 async function sendZapiMessage(phone, message) {
@@ -441,12 +474,10 @@ async function sendZapiMessage(phone, message) {
 }
 
 async function processarResposta(phone, reply) {
-  // v10: sem link, sem marcadores
   const cleanReply = reply.replace(/\[ENVIAR_LINK:\d\]/g, '').trim();
   await sendZapiMessage(phone, cleanReply);
 }
 
-// ========== MESSAGE QUEUE ==========
 function enqueueMessage(phone, message) {
   if (!messageBuffer.has(phone)) messageBuffer.set(phone, []);
   messageBuffer.get(phone).push(message);
@@ -498,7 +529,6 @@ async function flushBuffer(phone) {
   }
 }
 
-// ========== TRACKING ==========
 function captureTracking(phone, message) {
   if (userContext.has(phone)) return;
   const ctx = {};
@@ -507,11 +537,18 @@ function captureTracking(phone, message) {
       const m = message.match(new RegExp(`${p}=([^\\s&\\]]+)`));
       if (m) ctx[p] = m[1];
     });
+  
+  // Tracking de kit escolhido
+  const kitMatch = message.match(/kit\s+(1|2|3|5|10)/i);
+  if (kitMatch) {
+    ctx['kit_escolhido'] = parseInt(kitMatch[1]);
+    console.log(`📊 Kit rastreado: ${ctx['kit_escolhido']} potes`);
+  }
+  
   if (Object.keys(ctx).length > 0) console.log(`📊 Tracking ${phone}:`, ctx);
   userContext.set(phone, ctx);
 }
 
-// ========== WEBHOOK ==========
 app.post('/webhook', async (req, res) => {
   res.status(200).json({ ok: true });
   try {
@@ -573,19 +610,27 @@ app.post('/webhook', async (req, res) => {
 // ========== ROUTES ==========
 app.get('/', (req, res) => res.json({
   status: 'online',
-  version: '10.0',
+  version: '10.1',
   bot: 'Carlos GHDROL',
   features: [
-    '✅ Neutro (homem + mulher)',
-    '✅ NUNCA pergunta nome',
-    '✅ NÃO envia link (preserva gclid)',
-    '✅ Manual mode AGRESSIVO',
+    '✅ Kits atualizados (v15 landing)',
+    '✅ Protocolo completo (dieta + creatina + treino)',
+    '✅ Garantia 60 dias destacada',
+    '✅ Economia real por pote (-28% a -39%)',
+    '✅ Rastreamento de kit escolhido',
+    '✅ Neutro + Sem nome + Sem link',
+    '✅ Manual mode agressivo',
     '✅ 10 ATIVOS com explicação técnica',
     '✅ 4 sinergias documentadas',
     '✅ Compliance ANVISA estrito'
   ],
-  ingredientes: ['Zinco', 'Magnésio', 'L-Arginina', 'Boro', 'Vitamina D', 'B12', 'L-Lisina', 'Valina', 'Taurina', 'Niacinamida B3'],
-  sinergias: ['Trio Testosterona', 'Recuperação Hormonal', 'Síntese Proteica', 'Energia para Treino'],
+  kits_v10_1: {
+    '1 pote': 'R$147,90 (R$4,93/dia)',
+    '2 potes': 'R$237,90 (R$3,97/dia) -20%',
+    '3 potes': 'R$317,90 (R$3,53/dia) -28% ⭐ MAIS VENDIDO',
+    '5 potes': 'R$447,90 (R$2,99/dia) -39%',
+    '10 potes': 'R$900,00 (R$3,00/dia) -39%'
+  },
   stats: {
     conversas: conversationMemory.size,
     processando: processingUser.size,
@@ -596,7 +641,7 @@ app.get('/', (req, res) => res.json({
 
 app.get('/health', (req, res) => {
   const healthy = !!(ZAPI_KEY && ZAPI_INSTANCE && ZAPI_CLIENT_TOKEN && CLAUDE_API_KEY);
-  res.json({ status: healthy ? 'healthy' : 'unhealthy', version: '10.0' });
+  res.json({ status: healthy ? 'healthy' : 'unhealthy', version: '10.1' });
 });
 
 app.get('/stats', (req, res) => res.json({
@@ -621,6 +666,7 @@ app.post('/reset/:phone', (req, res) => {
   userContext.delete(phone);
   messageBuffer.delete(phone);
   recentBotMessages.delete(phone);
+  clientKitChoice.delete(phone);
   if (debounceTimers.has(phone)) {
     clearTimeout(debounceTimers.get(phone));
     debounceTimers.delete(phone);
@@ -652,37 +698,34 @@ app.get('/manual-list', (req, res) => {
 });
 
 app.get('/version', (req, res) => res.json({
-  version: '10.0',
-  changes_from_v9: [
-    '🆕 Composição COMPLETA: 10 ativos com dose, função, mecanismo',
-    '🆕 4 sinergias documentadas (Testosterona, Recuperação, Síntese, Energia)',
-    '🆕 Protocolo de explicação técnica conectando ativo→objetivo',
-    '🆕 Exemplos prontos para 3 perfis de cliente (energia, recuperação, força/massa)',
-    '🆕 Respostas técnicas para "aumenta testosterona?" e "cura impotência?"',
-    '🔧 Mantém: sem nome, neutro, sem link, manual mode agressivo'
+  version: '10.1',
+  changes_from_v10: [
+    '🆕 Kits atualizados: 1/2/3/5/10 potes (sem bônus enganoso)',
+    '🆕 Protocolo completo: dieta 2g/kg + creatina + treino',
+    '🆕 Garantia 60 dias destacada em TODAS as respostas de preço',
+    '🆕 Economia real calculada por pote (-28% a -39%)',
+    '🆕 Rastreamento de kit escolhido (novo tracking)',
+    '🆕 Instruções claras de checkout (sem link)',
+    '🔧 Mantém: sem nome, neutro, manual mode agressivo, compliance ANVISA'
   ],
-  ativos_completos: {
-    'Zinco': '7,0 mg — síntese de testosterona, imune, proteína',
-    'Magnésio': '260 mg — ATP, sono, contração muscular',
-    'L-Arginina': 'óxido nítrico + GH natural',
-    'Boro': 'manutenção testosterona + absorção magnésio',
-    'Vitamina D': 'testosterona + cálcio + imune',
-    'B12': 'ATP + metabolismo aminoácidos + DNA',
-    'L-Lisina': 'colágeno + cálcio + músculo',
-    'Valina': 'BCAA — fadiga + síntese proteica',
-    'Taurina': 'cálcio intracelular + performance',
-    'Niacinamida B3': 'ATP de carbs/gorduras + hormônios'
+  kits_completo: {
+    '1 pote → 30 dias': { preco: 'R$147,90', parcelado: '12x R$12,33', per_day: 'R$4,93', economia: '-' },
+    '2 potes → 60 dias': { preco: 'R$237,90', parcelado: '12x R$19,82', per_day: 'R$3,97', economia: '-20%' },
+    '3 potes → 90 dias': { preco: 'R$317,90', parcelado: '12x R$26,49', per_day: 'R$3,53', economia: '-28% ⭐' },
+    '5 potes → 150 dias': { preco: 'R$447,90', parcelado: '12x R$37,32', per_day: 'R$2,99', economia: '-39%' },
+    '10 potes → 300 dias': { preco: 'R$900,00', parcelado: '12x R$75,00', per_day: 'R$3,00', economia: '-39%' }
   }
 }));
 
 app.listen(PORT, () => {
   console.log('╔════════════════════════════════════════╗');
-  console.log('║  🤖 CARLOS v10.0                       ║');
-  console.log('║  ✅ Composição completa (10 ativos)    ║');
-  console.log('║  ✅ Sinergias documentadas (4)         ║');
-  console.log('║  ✅ Explicação técnica por objetivo    ║');
-  console.log('║  ✅ Neutro + Sem nome + Sem link       ║');
-  console.log('║  ✅ Manual mode agressivo              ║');
+  console.log('║  🤖 CARLOS v10.1 (ATUALIZADO)         ║');
+  console.log('║  ✅ Kits v15 da landing               ║');
+  console.log('║  ✅ Protocolo completo integrado      ║');
+  console.log('║  ✅ Garantia 60 dias destacada        ║');
+  console.log('║  ✅ Economia real por pote            ║');
+  console.log('║  ✅ Rastreamento de kit escolhido     ║');
+  console.log('║  ✅ Neutro + Sem nome + Sem link      ║');
   console.log(`║  Porta: ${PORT}                          ║`);
   console.log('╚════════════════════════════════════════╝');
 });
