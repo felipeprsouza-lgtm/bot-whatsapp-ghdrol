@@ -341,7 +341,7 @@ async function callClaude(phone, userMessage) {
       setTimeout(() => reject(new Error('Claude timeout 15s')), 15000)
     );
     const claudePromise = anthropic.messages.create({
-      model: 'claude-3-5-haiku-20250514',
+      model: 'claude-haiku-4-5-20251001',
       max_tokens: 512,
       system: systemPromptFinal,
       messages: history
