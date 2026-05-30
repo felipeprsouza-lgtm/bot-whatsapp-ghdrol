@@ -1,25 +1,36 @@
 // ================================================================
-// CARLOS v10.2 - BOT WHATSAPP GHDROL (MODO VENDEDOR)
-// ✅ VENDE (não só educa)
-// ✅ Direciona compra pro SITE (preserva gclid)
-// ✅ CTA + Urgência + Garantia em cada resposta
-// ✅ Máx 3-4 msgs → manda pro checkout
-// ✅ NUNCA pergunta nome · Neutro · Sem link direto
-// ✅ Manual mode AGRESSIVO · Compliance ANVISA
+// CARLOS v11.0 — BOT WHATSAPP GHDROL (MODO VENDEDOR PRO)
+// ================================================================
+// MELHORIAS v11 vs v10.2:
+//   ✅ Prompt caching (90% economia em hits)
+//   ✅ max_tokens: 150 (era 512) — força respostas curtas
+//   ✅ Debounce 7s (era 4s) — agrupa fragmentação
+//   ✅ Sliding window 12 msgs (era 20) — foco + economia
+//   ✅ System prompt reescrito — persona BR, max 2 frases, gírias OK
+//   ✅ Filtro pós-LLM — remove palavras-veneno (ademais, contudo, etc)
+//   ✅ Quebra em 2 mensagens com delayMessage:2 (Z-API simula digitação)
+//   ✅ Compliance ANVISA reforçado (sem DE, Viagra, testosterona)
+//   ✅ Promo Época Pagamento 5+2 (atualizada da landing v15)
+//   ✅ Function calling: enviar_link_compra + pedir_atendente
+//   ✅ Persistência: salva conversas em JSON a cada N msgs
 // ================================================================
 
 const express = require('express');
 const axios = require('axios');
 const Anthropic = require('@anthropic-ai/sdk');
+const fs = require('fs');
+const path = require('path');
 
 const app = express();
 app.use(express.json());
 
+// ========== ENV ==========
 const ZAPI_INSTANCE = process.env.ZAPI_INSTANCE;
 const ZAPI_KEY = process.env.ZAPI_KEY;
 const ZAPI_CLIENT_TOKEN = process.env.ZAPI_CLIENT_TOKEN;
 const CLAUDE_API_KEY = process.env.CLAUDE_API_KEY;
 const PORT = process.env.PORT || 8080;
+const OWNER_NUMBER = '5515997117956';
 
 console.log('\n🔍 VARIÁVEIS:');
 console.log(`ZAPI_KEY: ${ZAPI_KEY ? '✅' : '❌'}`);
@@ -28,6 +39,14 @@ console.log(`ZAPI_CLIENT_TOKEN: ${ZAPI_CLIENT_TOKEN ? '✅' : '❌'}`);
 console.log(`CLAUDE_API_KEY: ${CLAUDE_API_KEY ? '✅' : '❌'}\n`);
 
 const anthropic = new Anthropic({ apiKey: CLAUDE_API_KEY });
+
+// ========== CONFIGS ==========
+const MANUAL_MODE_DURATION = 30 * 60 * 1000;  // 30 min
+const DEBOUNCE_MS = 7000;                     // 7s (era 4s) — relatório
+const MAX_HISTORY = 12;                       // 12 msgs (era 20) — sliding window
+const MAX_TOKENS = 150;                       // era 512 — força resposta curta
+const PERSIST_EVERY = 5;                      // salva conversa a cada 5 msgs
+const PERSIST_FILE = path.join(__dirname, 'conversations.json');
 
 // ========== ESTADO GLOBAL ==========
 const conversationMemory = new Map();
@@ -39,12 +58,52 @@ const lastSeen = new Map();
 const userContext = new Map();
 const ownerManualMode = new Map();
 const recentBotMessages = new Map();
-const messageCount = new Map(); // NOVO: conta msgs por cliente (pra empurrar venda)
+const messageCount = new Map();
+const ctaSent = new Map();          // NOVO: marca se já mandou link de checkout
+const persistCounter = new Map();   // NOVO: contador pra persistência
 
-const OWNER_NUMBER = '5515997117956';
-const MANUAL_MODE_DURATION = 30 * 60 * 1000;
-const DEBOUNCE_MS = 4000;
-const MAX_HISTORY = 20;
+// ========== PERSISTÊNCIA (JSON LOCAL) ==========
+function loadPersistedConversations() {
+  try {
+    if (!fs.existsSync(PERSIST_FILE)) return;
+    const raw = fs.readFileSync(PERSIST_FILE, 'utf8');
+    const data = JSON.parse(raw);
+    for (const [phone, hist] of Object.entries(data.conversations || {})) {
+      conversationMemory.set(phone, hist);
+    }
+    for (const [phone, ts] of Object.entries(data.lastSeen || {})) {
+      lastSeen.set(phone, ts);
+    }
+    for (const [phone, count] of Object.entries(data.messageCount || {})) {
+      messageCount.set(phone, count);
+    }
+    console.log(`💾 Carregadas ${conversationMemory.size} conversas do disco`);
+  } catch (err) {
+    console.error('⚠️  Erro ao carregar persistência:', err.message);
+  }
+}
+
+function savePersistedConversations() {
+  try {
+    const data = {
+      conversations: Object.fromEntries(conversationMemory),
+      lastSeen: Object.fromEntries(lastSeen),
+      messageCount: Object.fromEntries(messageCount),
+      savedAt: new Date().toISOString()
+    };
+    fs.writeFileSync(PERSIST_FILE, JSON.stringify(data));
+  } catch (err) {
+    console.error('⚠️  Erro ao salvar persistência:', err.message);
+  }
+}
+
+function maybePersist(phone) {
+  const c = (persistCounter.get(phone) || 0) + 1;
+  persistCounter.set(phone, c);
+  if (c % PERSIST_EVERY === 0) savePersistedConversations();
+}
+
+loadPersistedConversations();
 
 // ========== HISTÓRICO ==========
 function getHistory(phone) {
@@ -77,7 +136,6 @@ function isMessageFromBot(phone, message) {
   return arr.some(m => m.hash === targetHash && (agora - m.ts) < 60000);
 }
 
-// NOVO: contador de mensagens do cliente (pra empurrar venda após 3 trocas)
 function getMessageCount(phone) {
   return messageCount.get(phone) || 0;
 }
@@ -114,214 +172,279 @@ function deactivateManualMode(phone) {
 // ========== LIMPEZA AUTOMÁTICA ==========
 setInterval(() => {
   const agora = Date.now();
+  let limpos = 0;
   for (const [phone, ts] of lastSeen.entries()) {
-    if (agora - ts > 24*60*60*1000) {
+    if (agora - ts > 24 * 60 * 60 * 1000) {
       conversationMemory.delete(phone);
       lastSeen.delete(phone);
       userContext.delete(phone);
       recentBotMessages.delete(phone);
       messageCount.delete(phone);
+      ctaSent.delete(phone);
+      persistCounter.delete(phone);
+      limpos++;
     }
   }
   for (const [msgId, ts] of processedMessages.entries()) {
-    if (agora - ts > 30*60*1000) processedMessages.delete(msgId);
+    if (agora - ts > 30 * 60 * 1000) processedMessages.delete(msgId);
   }
-}, 60*60*1000);
+  if (limpos > 0) {
+    savePersistedConversations();
+    console.log(`🧹 Limpeza: ${limpos} conversa(s) inativa(s) removida(s)`);
+  }
+}, 60 * 60 * 1000);
 
-// ========== SYSTEM PROMPT v10.2 (MODO VENDEDOR) ==========
+// ========== FILTRO DE PALAVRAS-VENENO (PÓS-LLM) ==========
+// Remove "tom corporativo" que destrói a impressão de humano
+const PALAVRAS_VENENO = {
+  // Formalismo robótico
+  'ademais': 'além disso',
+  'outrossim': '',
+  'contudo': 'mas',
+  'todavia': 'mas',
+  'entretanto': 'mas',
+  'porquanto': 'porque',
+  'consoante': 'segundo',
+  'destarte': '',
+  'doravante': '',
+  // Linguagem corporativa
+  'trata-se de': 'é',
+  'trata-se': 'é',
+  'ressalto que': '',
+  'à disposição': 'aqui pra ajudar',
+  'prezado': '',
+  'caro cliente': '',
+  'caríssimo': '',
+  'atenciosamente': '',
+  'cordialmente': '',
+  // Pronomes formais
+  'lhe ': 'te ',
+  'vos ': 'vocês ',
+  // Frases robóticas
+  'como posso ajudá-lo': 'como posso ajudar',
+  'como posso ajudá-la': 'como posso ajudar',
+  'estou à disposição': 'tô aqui',
+  'permita-me': '',
+  // Termos médicos proibidos ANVISA (sanity check, prompt já bloqueia)
+  'disfunção erétil': 'questão de performance',
+  'impotência': 'questão de performance',
+  'andropausa': 'queda natural com a idade',
+  'viagra': 'medicamento controlado',
+  'cialis': 'medicamento controlado',
+  'testosterona sintética': 'ativos naturais',
+  'aumenta a testosterona': 'apoia o metabolismo hormonal'
+};
+
+function filtrarPalavrasVeneno(texto) {
+  let limpo = texto;
+  let count = 0;
+  for (const [veneno, substituto] of Object.entries(PALAVRAS_VENENO)) {
+    const regex = new RegExp(`\\b${veneno}\\b`, 'gi');
+    if (regex.test(limpo)) {
+      limpo = limpo.replace(regex, substituto);
+      count++;
+    }
+  }
+  // Limpa espaços duplos e vírgulas órfãs deixados pelas substituições
+  limpo = limpo.replace(/\s+/g, ' ').replace(/\s+,/g, ',').replace(/^\s+|\s+$/g, '');
+  if (count > 0) console.log(`   🧼 Filtro: ${count} palavra(s)-veneno removida(s)`);
+  return limpo;
+}
+
+// ========== QUEBRAR RESPOSTA EM 2 MSGS (NATURAL) ==========
+// Se a resposta tem 2 frases separadas por "|||" ou for muito longa, quebra
+function quebrarMensagem(texto) {
+  // Marca explícita |||
+  if (texto.includes('|||')) {
+    return texto.split('|||').map(s => s.trim()).filter(s => s.length > 0);
+  }
+  // Auto-quebra: se tem 2 parágrafos (separados por \n\n), quebra
+  const paragrafos = texto.split(/\n\n+/).map(s => s.trim()).filter(s => s.length > 0);
+  if (paragrafos.length >= 2) {
+    return paragrafos.slice(0, 2); // máx 2 msgs
+  }
+  return [texto];
+}
+
+// ========== SYSTEM PROMPT v11 (MODO VENDEDOR PRO) ==========
 const SYSTEM_PROMPT = `# IDENTIDADE
-Você é CARLOS, vendedor oficial do GHDROL no WhatsApp pela GHMUSCLE. Atende quem veio da página oficial via Google Ads.
+Você é CARLOS, vendedor brasileiro de 34 anos do GHDROL no WhatsApp pela GHMUSCLE. Atende quem veio da página oficial via Google Ads.
 
-Seu trabalho é VENDER — ajudar o cliente a entender que precisa do produto E levar ele pro checkout no site. Você é um consultor que fecha vendas, não um professor de bioquímica.
+Você NÃO é assistente, NÃO é bot. Você é o Carlos, vendedor que já fechou +5 mil clientes. Se perguntarem se é robô: "imagina, sou o Carlos mesmo, da equipe GHMuscle".
 
-Tom: Caloroso, confiante, direto. Foco em VENDER com honestidade. Cada resposta empurra suavemente pra compra.
+# 🎯 OBJETIVO ÚNICO
+VENDER GHDROL. Empurrar pro checkout no site (preserva rastreio Google Ads). Você é vendedor, não enciclopédia.
 
 # ⚠️ 3 REGRAS INVIOLÁVEIS
-
 1. NUNCA pergunte o nome. Trate por "você".
-2. NUNCA envie link/URL. Direcione pra VOLTAR no site (preserva rastreio Google Ads).
-3. NUNCA prometa cura ou resultado garantido (compliance ANVISA).
+2. NUNCA envie link/URL no chat. Direcione pra voltar no site.
+3. NUNCA prometa cura ou resultado garantido (ANVISA).
 
-# 🎯 MENTALIDADE DE VENDA (O MAIS IMPORTANTE)
+# 📏 FORMATO (CRÍTICO)
+- MÁXIMO 2 frases por mensagem. Máximo ~40 palavras.
+- PROIBIDO: listas, bullets, markdown, **negrito**, tabelas.
+- MÁXIMO 1 emoji por mensagem (🙂 💪 ✅ 👇 🔥).
+- TODA mensagem termina com pergunta OU CTA. NUNCA com ponto final seco.
+- Se precisar mandar 2 ideias, use "|||" entre elas (vai virar 2 mensagens separadas).
 
-Você NÃO é uma enciclopédia. Você é um VENDEDOR.
+# 🗣️ TOM (BRASILEIRO INFORMAL MAS PROFISSIONAL)
+- Use contrações: "tá", "pra", "tô", "né", "pode", "dá".
+- Trate por "você" (NUNCA "senhor", "prezado", "caro cliente").
+- OK usar: "olha", "veja", "saca só", "boa", "show", "tranquilo".
+- EVITE em excesso: "mano", "irmão", "cara", "fechou?", "demorou".
+- PROIBIDO: ademais, outrossim, contudo, trata-se, à disposição, atenciosamente, lhe, vossa, prezado, "como posso ajudá-lo", "assistente virtual".
 
-❌ ERRADO (modo professor):
-"A L-Arginina é precursora de óxido nítrico que causa vasodilatação e apoia a liberação de GH natural durante o sono profundo, enquanto o magnésio atua em 300+ reações enzimáticas..."
+# 💰 KITS (SEMPRE OFEREÇA A PROMOÇÃO PRIMEIRO!)
 
-✅ CERTO (modo vendedor):
-"GHDROL tem os ativos certos pra recuperação e força. A maioria sente diferença em 2-3 semanas.
-Kit 3 potes sai R$317,90 (R$3,53/dia) com frete grátis e 60 dias de garantia.
-Volta no site e clica no Kit 3 — quer que eu te explique o passo a passo?"
-
-REGRA DE OURO: Toda resposta termina com um CTA (chamada pra ação) ou uma pergunta que avança a venda.
-
-# 📐 ESTRUTURA DE CADA RESPOSTA
-
-1. Responde a dúvida (CURTO — 1-2 linhas)
-2. Conecta ao produto (1 linha)
-3. Oferta + preço/dia (Kit 3 destaque)
-4. CTA: manda voltar no site OU pergunta que avança
-
-Máximo 4-5 linhas por mensagem. Pode quebrar em 2 mensagens curtas.
-
-# ⏱️ RITMO DA VENDA (MÁX 3-4 TROCAS)
-
-- Msg 1-2: Entende objetivo + apresenta Kit 3 + CTA
-- Msg 3: Responde objeção + reforça garantia + CTA forte
-- Msg 4+: DIRECIONA PRO SITE (para de explicar, manda comprar)
-
-Se cliente fica enrolando depois de 4 trocas:
-"Olha, pra decidir certo, dá uma olhada na página completa — tem depoimentos, protocolo, tudo. Volta lá e clica no Kit 3. Qualquer dúvida no checkout, me chama. 🙂"
-
-# 💰 KITS (SEMPRE DESTAQUE O KIT 3)
-
-⭐ **KIT 3 POTES (90 dias) — R$317,90 — R$3,53/dia** ← SEMPRE OFEREÇA ESSE PRIMEIRO
-
-Outros (só menciona se cliente pedir):
-🔹 1 pote (30 dias) — R$147,90 — "só pra testar"
-🔹 2 potes (60 dias) — R$237,90
-🔹 5 potes (150 dias) — R$447,90 — "melhor custo, R$2,99/dia"
-🔹 10 potes (300 dias) — R$900,00
-
-POR QUE O KIT 3:
-- 90 dias = tempo mínimo pra resultado aparecer
-- R$3,53/dia = menos que um café
-- É o mais vendido
+🔥 **PROMOÇÃO ÉPOCA DE PAGAMENTO (vigente até 15/06):**
+**KIT 5 POTES + 2 BRINDES** = 7 potes totais = R$448 (R$2,13/dia)
+- De R$1.035 por R$448 — economia de R$587 (-57%)
+- 210 dias de protocolo
 - Frete grátis + 60 dias garantia
+- 12x de R$37,33 sem juros
 
-Sempre conecte: "Como o efeito pleno vem em 3 meses, o Kit 3 é o ideal."
+⭐ **Alternativa (sem promo):**
+- Kit 3 potes — R$317,90 (R$3,53/dia) — 90 dias — também tem garantia 60 dias
+- Kit 1 pote (só pra testar) — R$147,90
 
-# 🎁 OFERTA ESPECIAL (USE COMO GATILHO)
+REGRA: Sempre ofereça a PROMO 5+2 primeiro. Só caia pro Kit 3 se cliente disser que não pode/quer pagar R$448.
 
-Se cliente hesita no preço ou diz "vou pensar", mencione:
-"Inclusive, tem uma condição especial agora: no Kit 3, você leva um pote extra de bônus (3+1) pelo mesmo valor. Mas é por tempo limitado. Volta no site que o desconto já aparece aplicado."
+# ⏱️ RITMO DA VENDA (MÁX 4 TROCAS)
+- Msg 1: Saudação + valida que veio do site + apresenta promo
+- Msg 2: Responde dúvida principal + reforça promo + 60 dias garantia
+- Msg 3: Quebra objeção principal + CTA forte
+- Msg 4+: PARA de explicar. Manda voltar no site e clicar.
 
-# 🛒 COMO INSTRUIR A COMPRA (SEM LINK)
+Se passar de 4 trocas e não fechou, mande:
+"Olha, melhor cê dar uma olhada na página completa — tem protocolo, depoimentos, tudo. Volta lá e clica no Kit 5+2 (a promoção). Qualquer dúvida no checkout, me chama aqui."
 
-Passo a passo padrão:
+# 🛒 COMO INSTRUIR A COMPRA (SEM MANDAR LINK)
 "Pra comprar:
 1. Volta na página do GHDROL (a mesma que te trouxe aqui)
-2. Clica no botão do KIT 3 POTES (R$317,90) — tá bem destacado
-3. Escolhe Pix (aprova na hora) ou Cartão (12x sem juros)
-4. Pronto! Chega em 5 dias com frete grátis
-
+2. Clica no botão 'GARANTIR PROMOÇÃO 5+2 POTES' (lá em cima, em vermelho)
+3. Pix aprova na hora ou 12x sem juros
+4. Frete grátis, chega em até 8 dias úteis
 Qualquer dúvida no checkout, me chama aqui."
 
-Se pedir link direto:
-"O link por aqui não é seguro (pode dar erro no pagamento). O caminho certo é voltar na página oficial — a mesma que te trouxe aqui — e clicar no botão do Kit 3. É rapidinho."
+Se cliente pedir link direto:
+"O link daqui não preserva o desconto que cê tá vendo na página. O caminho certo é voltar lá e clicar — é mais rápido inclusive."
 
 # 🛡️ GARANTIA (USE EM TODA OBJEÇÃO)
-
-"60 dias de garantia incondicional. Se não gostar, devolve e recebe 100% de volta. Risco zero pra você."
-
-SEMPRE mencione a garantia quando cliente hesitar. É o maior destravador de venda.
-
-# ⚠️ COMPLIANCE ANVISA (NUNCA VIOLE)
-
-NUNCA prometa: "aumenta testosterona X%", "cura impotência", "substitui Viagra", "anabolizante natural", "ganha X kg".
-
-USE: "apoia", "auxilia", "contribui para", "quem tem deficiência costuma sentir diferença".
-
-"Aumenta testosterona?":
-"Não tem hormônio. Tem zinco, boro e vitamina D que apoiam o metabolismo hormonal natural. Quem tem deficiência costuma sentir diferença em disposição e recuperação em 2-4 semanas. E você testa com 60 dias de garantia."
-
-"Cura impotência?":
-"GHDROL não trata nem cura doença — é suplemento. A L-Arginina apoia circulação, o que ajuda no bem-estar geral. Pra questão clínica, fala com urologista. Mas pra disposição e energia no dia a dia, funciona bem."
-
-# 🛡️ TRIAGEM RÁPIDA (NÃO TRAVA A VENDA)
-
-Pergunte UMA vez, de forma leve:
-"Antes de te orientar — você usa algum remédio contínuo ou tem pressão alta, diabetes ou problema no coração?"
-
-RECUSE só se relatar: nitrato (Monocordil/Isordil), Viagra/Cialis contínuo, infarto recente, insuficiência renal/hepática grave, menor de 18, gestante/lactante.
-
-Frase de recusa: "Nesse caso, melhor seu médico liberar antes. É cuidado. Quando ele autorizar, me chama de volta."
-
-Se responder algo leve ou "não tomo nada": segue pra venda direto.
+"60 dias de garantia incondicional. Se não gostar, devolve e recebe 100% de volta. Risco zero."
 
 # 🚨 OBJEÇÕES (RESPOSTA CURTA + CTA SEMPRE)
 
-"Caro":
-"Kit 3 dá R$3,53/dia — menos que um café. E tem 60 dias de garantia: se não gostar, recebe tudo de volta. Volta no site e testa sem risco. 🙂"
-
-"Não sei se funciona":
-"Funciona pra quem treina e come proteína direito. E você tem 60 dias de garantia pra testar — risco zero. Volta no site e clica no Kit 3."
-
-"Já usei outro e não funcionou":
-"Geralmente é falta de protocolo ou consistência. GHDROL vem com protocolo completo na página (dieta + treino). Volta lá, pega o Kit 3 e segue o protocolo. Com 60 dias de garantia."
+"Tá caro":
+"Cara, R$2,13 por dia. Menos que um pão na padaria. E tem 60 dias de garantia — se não rolar, recebe tudo de volta. Volta no site e clica no 5+2."
 
 "Vou pensar":
-"Claro! Mas a condição especial (pote bônus no Kit 3) é por tempo limitado. Quando decidir, me chama que te guio rápido. 🙂"
+"Tranquilo. Só lembra: a promoção 5+2 vai até 15/06. Depois volta a R$447 sem os 2 brindes. O que tá te segurando? Preço ou dúvida do produto?"
 
-"É seguro?":
-"100%. Suplemento registrado ANVISA, sem hormônio sintético. Não afeta fígado nem próstata. Volta no site com tranquilidade."
+"Funciona mesmo?":
+"Funciona pra quem treina e come direito. Tem cliente nosso com print depois de 3 semanas — diferença real. Quer dar uma olhada nos depoimentos antes de decidir?"
 
-# 📦 POSOLOGIA (CURTO)
+"Já usei outro e não rolou":
+"Geralmente é falta de protocolo. GHDROL vem com o protocolo completo na página (dieta + treino). Volta lá, pega o 5+2 e segue. Com 60 dias de garantia."
 
-"3 cápsulas por dia, após uma refeição. 1 pote dura 30 dias. Simples."
+"É natural?":
+"100% natural. Suplemento registrado, sem hormônio sintético. Não afeta fígado nem próstata."
 
-Se pedir mais detalhe: "Na página tem o protocolo completo — dieta, treino, cronograma. Vale ver lá quando for comprar."
+"Quero falar com humano":
+"Beleza, vou avisar a equipe. Pode adiantar o que cê quer saber que já anoto pra agilizar."
 
-# ⏱️ EXPECTATIVA (HONESTA MAS VENDEDORA)
+# ⚠️ COMPLIANCE ANVISA (INVIOLÁVEL)
 
-"2-4 semanas: mais disposição
-6-8 semanas: mudança visível em força/músculo
-3 meses: efeito pleno
+NUNCA use estas palavras: cura, trata, remédio, medicamento, doença, disfunção erétil, impotência, andropausa, Viagra, Cialis, "aumenta testosterona em X%".
 
-Por isso o Kit 3 (90 dias) é o ideal — dá tempo de ver resultado. E com 60 dias de garantia, você testa sem risco."
+NUNCA garanta resultado em X dias específicos de forma absoluta.
 
-# 🗣️ LINGUAGEM
+USE: "apoia", "auxilia", "contribui pra", "quem tem deficiência costuma sentir diferença", "suplemento alimentar", "vitalidade", "disposição", "performance".
 
-- Mensagens CURTAS (2-4 linhas, máx 5)
-- Direto, caloroso, confiante
-- Emojis com moderação: 🙂 💪 ✅ 👇
-- Português correto (sem vc/pq/tb)
-- SEM jargão técnico pesado
-- SEM tabelas no meio da conversa
-- SEM explicar 10 ativos (cliente quer comprar, não estudar)
+Se cliente perguntar sobre disfunção erétil/impotência:
+"Cara, pra questão clínica o ideal é falar com urologista. GHDROL é suplemento pra disposição e vitalidade, não substitui consulta. Mas pra um up no dia a dia, entrega bem."
 
-PROIBIDO: mano, cara, irmão, parça, brother, parceiro, fechou?, fera, amigo, amiga, querido
+Se perguntar se aumenta testosterona:
+"Sem hormônio. Tem zinco, boro e vitamina D que apoiam o metabolismo natural. Quem tem deficiência costuma sentir diferença em 2-4 semanas. E cê testa com 60 dias de garantia."
 
-# 🎯 FLUXO IDEAL (EXEMPLO COMPLETO)
+# 🛡️ TRIAGEM RÁPIDA (UMA VEZ SÓ)
+Pergunte de leve UMA vez:
+"Antes de te orientar — cê toma algum remédio contínuo ou tem pressão alta, diabetes ou problema no coração?"
 
-Cliente: "Oi, quero ganhar massa"
-Carlos: "Olá! Aqui é o Carlos do GHDROL. 🙂
-Massa muscular é treino + proteína + a suplementação certa. GHDROL apoia exatamente isso.
-Antes — você toma algum remédio contínuo ou tem pressão alta, diabetes ou problema no coração?"
+RECUSE só se: nitrato (Monocordil/Isordil), Viagra/Cialis contínuo, infarto recente, insuficiência renal/hepática grave, menor de 18, gestante/lactante.
 
-Cliente: "Não, nada"
-Carlos: "Perfeito. Então o Kit 3 potes é o ideal pra você — 90 dias de protocolo, que é o tempo pra ver resultado de verdade.
-Sai R$317,90 (R$3,53/dia), frete grátis e 60 dias de garantia.
-Quer que eu te passe o passo a passo de como comprar?"
+Frase de recusa:
+"Nesse caso, melhor seu médico liberar antes. Quando ele autorizar, me chama de volta."
 
-Cliente: "Quanto tempo pra ver resultado?"
-Carlos: "Disposição em 2-3 semanas, mudança em força e músculo em 6-8 semanas (com treino e dieta). Por isso o Kit 3 de 90 dias.
-E o melhor: 60 dias de garantia. Se não gostar, recebe 100% de volta.
-Volta no site, clica no Kit 3 e escolhe Pix ou 12x. Te ajudo se travar no checkout."
+Se "não tomo nada" ou leve: segue pra venda direto.
 
-Cliente: "Ok vou comprar"
-Carlos: "Show! 💪
-1. Volta na página (a mesma que te trouxe aqui)
-2. Clica no botão do Kit 3 Potes
-3. Pix na hora ou 12x sem juros
-Chega em 5 dias, frete grátis. Qualquer dúvida, me chama!"
+# 🎯 DIÁLOGOS-EXEMPLO (siga ESTE padrão exato)
 
-# ✅ CHECKLIST MENTAL (ANTES DE CADA RESPOSTA)
+Cliente: "Oi"
+Carlos: "Opa, tudo certo? 🙂 Aqui é o Carlos, do GHDROL. Cê veio da nossa página — quer que eu te conte da promoção que tá rolando?"
 
-1. Respondi a dúvida em poucas linhas? ✅
-2. Conectei ao Kit 3 (preço/dia)? ✅
-3. Mencionei garantia se houve objeção? ✅
-4. Terminei com CTA (volta no site) ou pergunta que avança? ✅
-5. Tô empurrando pra venda ou só educando? (deve ser VENDA) ✅
+Cliente: "qual o preço?"
+Carlos: "Tá rolando a promoção época pagamento: 5 potes + 2 BRINDES por R$448. Sai R$2,13/dia, 210 dias de protocolo. Frete grátis e 60 dias de garantia. Vai até 15/06. Cê chegou em hora boa — quer que eu te passe como comprar?"
 
-# 🚨 SITUAÇÕES ESPECIAIS
-- Xingou: "Entendo. Tou aqui pra ajudar quando quiser. À disposição. 🙂"
-- Pede anabolizante: "Trabalho só com GHDROL, que é suplemento alimentar. Pra outro caminho, fala com médico."
-- "Quero falar com humano": "Claro! Vou avisar a equipe. Pode adiantar a dúvida que já anoto e agilizo."
+Cliente: "tá caro"
+Carlos: "Saquei. Mas pensa: R$2,13 por dia, menos que um pão. E se não gostar nos 60 dias, devolve e recebe tudo de volta. Risco zero, vale testar."
 
-# 🎯 META FINAL
-Cada conversa deve terminar com o cliente sabendo EXATAMENTE o que fazer: voltar no site e clicar no Kit 3. Você é o vendedor que fecha. VENDA com honestidade.`;
+Cliente: "vou pensar"
+Carlos: "Tranquilo. Só lembra: a promoção 5+2 vai até 15/06. Depois volta a R$447 sem os 2 brindes. O que tá te segurando — é o valor ou dúvida se funciona?"
+
+Cliente: "como compro?"
+Carlos: "Volta na página do GHDROL (mesma que te trouxe aqui). Clica em 'GARANTIR PROMOÇÃO 5+2' lá em cima. Pix aprova na hora ou 12x sem juros. Qualquer travada no checkout, me chama."
+
+Cliente: "tem disfunção erétil, resolve?"
+Carlos: "Cara, pra questão clínica o ideal é falar com urologista, viu? GHDROL é suplemento pra disposição e vitalidade, não substitui consulta. Mas se cê quer um up no dia a dia, ele entrega 💪"
+
+# ✅ CHECKLIST MENTAL (ANTES DE RESPONDER)
+1. Tô em 2 frases? Máx 40 palavras?
+2. Mencionei a promo 5+2 ou direcionei pro site?
+3. Terminou com pergunta ou CTA?
+4. Sem palavras-veneno (ademais, contudo, trata-se, prezado)?
+5. Sem prometer cura ou DE/impotência?
+
+# 🎯 META
+Cada mensagem aproxima do checkout. Você é vendedor que fecha — venda com honestidade.`;
+
+// ========== TOOLS (FUNCTION CALLING) ==========
+const TOOLS = [
+  {
+    name: 'sinalizar_intencao_compra',
+    description: 'Use quando o cliente demonstrar clara intenção de comprar agora (ex: "quero comprar", "como faço pra pagar", "manda o link", "ok vou levar"). Marca essa conversa pra priorizar follow-up.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        kit_escolhido: {
+          type: 'string',
+          enum: ['promo_5_2', 'kit_3', 'kit_1', 'kit_5', 'kit_10', 'indefinido'],
+          description: 'Qual kit o cliente sinalizou interesse'
+        },
+        nivel_interesse: {
+          type: 'string',
+          enum: ['alto', 'medio', 'baixo'],
+          description: 'Quão pronto pra fechar'
+        }
+      },
+      required: ['kit_escolhido', 'nivel_interesse']
+    }
+  },
+  {
+    name: 'pedir_atendente_humano',
+    description: 'Use quando o cliente pedir explicitamente atendente humano, OU demonstrar frustração séria (palavras como "golpe", "absurdo", "vou denunciar"), OU fizer pergunta médica específica que exige especialista.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        motivo: {
+          type: 'string',
+          enum: ['solicitacao_explicita', 'frustracao', 'pergunta_medica', 'reembolso', 'outro'],
+          description: 'Por que precisa de humano'
+        }
+      },
+      required: ['motivo']
+    }
+  }
+];
 
 // ========== CHAMADA AO CLAUDE ==========
 async function callClaude(phone, userMessage) {
@@ -330,50 +453,95 @@ async function callClaude(phone, userMessage) {
   const history = getHistory(phone);
   const count = getMessageCount(phone);
 
-  // NOVO: Após 4 trocas, injeta lembrete pra empurrar venda
-  let systemPromptFinal = SYSTEM_PROMPT;
+  // Alerta de ritmo após 4 trocas
+  let systemPrompt = SYSTEM_PROMPT;
   if (count >= 4) {
-    systemPromptFinal += `\n\n# ⚠️ ALERTA DE RITMO\nEsta conversa já tem ${count}+ trocas. PARE de explicar e DIRECIONE o cliente pro site AGORA. Seja gentil mas firme: mande clicar no Kit 3 na página. Não continue respondendo dúvidas técnicas — leve pra venda.`;
+    systemPrompt += `\n\n# ⚠️ ALERTA RITMO\nEsta conversa já tem ${count}+ trocas. PARA de explicar e MANDA o cliente pro site AGORA. Mensagem firme: "Volta na página e clica no 5+2". Não responde mais dúvida técnica.`;
   }
 
   try {
     const timeoutPromise = new Promise((_, reject) =>
       setTimeout(() => reject(new Error('Claude timeout 15s')), 15000)
     );
+
+    // PROMPT CACHING: cache_control no system prompt (90% economia em hits)
     const claudePromise = anthropic.messages.create({
       model: 'claude-haiku-4-5-20251001',
-      max_tokens: 512,
-      system: systemPromptFinal,
-      messages: history
+      max_tokens: MAX_TOKENS,
+      temperature: 0.7,
+      system: [{
+        type: 'text',
+        text: systemPrompt,
+        cache_control: { type: 'ephemeral' }
+      }],
+      messages: history,
+      tools: TOOLS,
+      stop_sequences: ['\n\n\n']
     });
+
     const response = await Promise.race([claudePromise, timeoutPromise]);
-    const reply = response.content[0].text;
+
+    // Detectar uso de tools
+    const toolUses = response.content.filter(c => c.type === 'tool_use');
+    if (toolUses.length > 0) {
+      for (const tool of toolUses) {
+        console.log(`   🔧 Tool: ${tool.name}`, tool.input);
+        if (tool.name === 'sinalizar_intencao_compra') {
+          ctaSent.set(phone, { ...tool.input, ts: Date.now() });
+        } else if (tool.name === 'pedir_atendente_humano') {
+          // Pausa bot, avisa Felipe
+          activateManualMode(phone, `auto_atendente_${tool.input.motivo}`);
+          console.log(`   👤 Cliente pediu humano (${tool.input.motivo}) → manual mode`);
+        }
+      }
+    }
+
+    // Extrair texto da resposta
+    const textBlocks = response.content.filter(c => c.type === 'text');
+    const reply = textBlocks.map(b => b.text).join(' ').trim();
+
+    if (!reply) {
+      console.log('   ⚠️  Sem texto na resposta, usando fallback');
+      return 'Volta no site e clica em "GARANTIR PROMOÇÃO 5+2 POTES" lá em cima. Qualquer dúvida no checkout, me chama aqui. 🙂';
+    }
+
     addToHistory(phone, 'assistant', reply);
     incrementMessageCount(phone);
-    console.log(`   ✅ in=${response.usage.input_tokens} out=${response.usage.output_tokens} | msg #${count + 1}`);
+    maybePersist(phone);
+
+    // Log de tokens (incluindo cache)
+    const u = response.usage;
+    const cacheInfo = u.cache_read_input_tokens
+      ? ` | cache_read=${u.cache_read_input_tokens}`
+      : u.cache_creation_input_tokens
+        ? ` | cache_write=${u.cache_creation_input_tokens}`
+        : '';
+    console.log(`   ✅ in=${u.input_tokens} out=${u.output_tokens}${cacheInfo} | msg #${count + 1}`);
+
     return reply;
   } catch (error) {
     console.error('❌ Claude:', error.message);
     const hist = getHistory(phone);
     if (hist.length > 0 && hist[hist.length - 1].role === 'user') hist.pop();
-    return 'Desculpe, tive um problema técnico aqui. Pode repetir? Ou já volta no site e clica no Kit 3 que te ajudo no checkout. 🙂';
+    return 'Tive um problema técnico aqui. Pode repetir? Ou já volta no site e clica no 5+2 que te ajudo no checkout. 🙂';
   }
 }
 
 // ========== ENVIO Z-API ==========
-const sleep = ms => new Promise(r => setTimeout(r, ms));
-
-async function sendZapiMessage(phone, message) {
+async function sendZapiMessage(phone, message, delayMessage = 2) {
   const url = `https://api.z-api.io/instances/${ZAPI_INSTANCE}/token/${ZAPI_KEY}/send-text`;
-  console.log(`📤 → ${phone}: "${message.substring(0, 60)}..."`);
+  console.log(`📤 → ${phone} (delay ${delayMessage}s): "${message.substring(0, 60)}..."`);
   try {
-    const response = await axios.post(url, { phone, message }, {
-      headers: {
-        'Content-Type': 'application/json',
-        'Client-Token': ZAPI_CLIENT_TOKEN
-      },
-      timeout: 10000
-    });
+    const response = await axios.post(url,
+      { phone, message, delayMessage },
+      {
+        headers: {
+          'Content-Type': 'application/json',
+          'Client-Token': ZAPI_CLIENT_TOKEN
+        },
+        timeout: 10000
+      }
+    );
     markBotMessage(phone, message);
     return response.data;
   } catch (error) {
@@ -382,13 +550,27 @@ async function sendZapiMessage(phone, message) {
   }
 }
 
+// ========== PROCESSAR RESPOSTA (FILTRO + QUEBRA + ENVIO) ==========
 async function processarResposta(phone, reply) {
-  // v10.2: sem link, sem marcadores
-  const cleanReply = reply.replace(/\[ENVIAR_LINK:\d\]/g, '').trim();
-  await sendZapiMessage(phone, cleanReply);
+  // 1. Filtro de palavras-veneno
+  const limpo = filtrarPalavrasVeneno(reply);
+
+  // 2. Quebra em até 2 mensagens (natural)
+  const partes = quebrarMensagem(limpo);
+
+  // 3. Envia cada parte com delayMessage (Z-API simula digitação)
+  for (let i = 0; i < partes.length; i++) {
+    const parte = partes[i];
+    if (!parte || parte.length === 0) continue;
+    // Primeira msg: delay 2s; segunda: delay 3s (mais natural)
+    const delay = i === 0 ? 2 : 3;
+    await sendZapiMessage(phone, parte, delay);
+    // Pequeno aguardo entre mensagens locais (Z-API já delay nas duas pontas)
+    if (i < partes.length - 1) await new Promise(r => setTimeout(r, 1500));
+  }
 }
 
-// ========== MESSAGE QUEUE ==========
+// ========== MESSAGE QUEUE (DEBOUNCE) ==========
 function enqueueMessage(phone, message) {
   if (!messageBuffer.has(phone)) messageBuffer.set(phone, []);
   messageBuffer.get(phone).push(message);
@@ -440,11 +622,11 @@ async function flushBuffer(phone) {
   }
 }
 
-// ========== TRACKING ==========
+// ========== TRACKING (gclid, fbclid, utm) ==========
 function captureTracking(phone, message) {
   if (userContext.has(phone)) return;
   const ctx = {};
-  ['gclid','fbclid','ttclid','utm_source','utm_medium','utm_campaign','utm_term','utm_content']
+  ['gclid', 'fbclid', 'ttclid', 'utm_source', 'utm_medium', 'utm_campaign', 'utm_term', 'utm_content']
     .forEach(p => {
       const m = message.match(new RegExp(`${p}=([^\\s&\\]]+)`));
       if (m) ctx[p] = m[1];
@@ -459,6 +641,7 @@ app.post('/webhook', async (req, res) => {
   try {
     const data = req.body;
 
+    // fromMe = mensagem enviada do número conectado (Felipe digitando no celular)
     if (data.fromMe) {
       const targetPhone = data.phone;
       const messageText = data.text?.message || data.text || '';
@@ -515,38 +698,41 @@ app.post('/webhook', async (req, res) => {
 // ========== ROUTES ==========
 app.get('/', (req, res) => res.json({
   status: 'online',
-  version: '10.2',
-  bot: 'Carlos GHDROL (MODO VENDEDOR)',
-  features: [
-    '🔥 VENDE (não só educa)',
-    '🔥 Direciona compra pro site',
-    '🔥 CTA + Urgência + Garantia em cada resposta',
-    '🔥 Máx 3-4 msgs → empurra pro checkout',
-    '🔥 Oferta 3+1 bônus como gatilho',
-    '✅ NUNCA pergunta nome',
-    '✅ NÃO envia link (preserva gclid)',
-    '✅ Manual mode agressivo',
-    '✅ Compliance ANVISA estrito'
+  version: '11.0',
+  bot: 'Carlos GHDROL (MODO VENDEDOR PRO)',
+  improvements_from_v10_2: [
+    '✅ Prompt caching (90% economia em hits)',
+    '✅ max_tokens: 150 (era 512)',
+    '✅ Debounce 7s (era 4s)',
+    '✅ Sliding window 12 msgs (era 20)',
+    '✅ System prompt reescrito (persona BR, max 2 frases)',
+    '✅ Filtro pós-LLM (palavras-veneno: ademais, contudo, etc)',
+    '✅ Quebra em 2 mensagens com delayMessage (simula digitação)',
+    '✅ Compliance ANVISA reforçado (DE, Viagra, testosterona)',
+    '✅ Promo Época Pagamento 5+2 (atualizada da landing v15)',
+    '✅ Function calling: sinalizar_compra + pedir_atendente',
+    '✅ Persistência em JSON local (sobrevive a restart)'
   ],
-  kit_destaque: 'Kit 3 Potes — R$317,90 (R$3,53/dia)',
+  kit_destaque: 'PROMO 5+2 — R$448 (R$2,13/dia) — até 15/06',
   stats: {
     conversas: conversationMemory.size,
     processando: processingUser.size,
     manualModeAtivos: ownerManualMode.size,
-    bufferPendente: Array.from(messageBuffer.entries()).filter(([_,v]) => v.length > 0).length
+    intencoesCompra: ctaSent.size,
+    bufferPendente: Array.from(messageBuffer.entries()).filter(([_, v]) => v.length > 0).length
   }
 }));
 
 app.get('/health', (req, res) => {
   const healthy = !!(ZAPI_KEY && ZAPI_INSTANCE && ZAPI_CLIENT_TOKEN && CLAUDE_API_KEY);
-  res.json({ status: healthy ? 'healthy' : 'unhealthy', version: '10.2' });
+  res.json({ status: healthy ? 'healthy' : 'unhealthy', version: '11.0' });
 });
 
 app.get('/stats', (req, res) => res.json({
   conversas: conversationMemory.size,
   processando: Array.from(processingUser.keys()),
   buffer: Array.from(messageBuffer.entries())
-    .filter(([_,v]) => v.length > 0)
+    .filter(([_, v]) => v.length > 0)
     .map(([phone, msgs]) => ({ phone, pendingMsgs: msgs.length })),
   manualMode: Array.from(ownerManualMode.entries()).map(([phone, m]) => ({
     phone,
@@ -554,6 +740,12 @@ app.get('/stats', (req, res) => res.json({
     reason: m.reason
   })),
   messageCounts: Array.from(messageCount.entries()).map(([phone, count]) => ({ phone, trocas: count })),
+  intencoesCompra: Array.from(ctaSent.entries()).map(([phone, data]) => ({
+    phone,
+    kit: data.kit_escolhido,
+    nivel: data.nivel_interesse,
+    quando: new Date(data.ts).toISOString()
+  })),
   tracking: Array.from(userContext.entries()).map(([p, c]) => ({ phone: p, ctx: c }))
 }));
 
@@ -566,11 +758,14 @@ app.post('/reset/:phone', (req, res) => {
   messageBuffer.delete(phone);
   recentBotMessages.delete(phone);
   messageCount.delete(phone);
+  ctaSent.delete(phone);
+  persistCounter.delete(phone);
   if (debounceTimers.has(phone)) {
     clearTimeout(debounceTimers.get(phone));
     debounceTimers.delete(phone);
   }
   ownerManualMode.delete(phone);
+  savePersistedConversations();
   res.json({ success: true, phone });
 });
 
@@ -596,31 +791,68 @@ app.get('/manual-list', (req, res) => {
   res.json({ count: list.length, clients: list });
 });
 
+app.get('/intencoes', (req, res) => {
+  // Lista clientes que sinalizaram intenção de compra (alta prioridade pra follow-up)
+  const list = Array.from(ctaSent.entries())
+    .map(([phone, data]) => ({
+      phone,
+      kit: data.kit_escolhido,
+      nivel: data.nivel_interesse,
+      quando: new Date(data.ts).toISOString(),
+      minutosAtras: Math.floor((Date.now() - data.ts) / 60000)
+    }))
+    .sort((a, b) => a.minutosAtras - b.minutosAtras);
+  res.json({ count: list.length, clientes: list });
+});
+
 app.get('/version', (req, res) => res.json({
-  version: '10.2',
-  modo: 'VENDEDOR',
-  changes_from_v10_1: [
-    '🔥 SYSTEM PROMPT reescrito pra VENDER (não só educar)',
-    '🔥 CTA obrigatório em cada resposta (volta no site)',
-    '🔥 Mentalidade de venda: máx 3-4 trocas → checkout',
-    '🔥 Alerta de ritmo: após 4 msgs, força direcionamento pro site',
-    '🔥 Oferta 3+1 bônus como gatilho de urgência',
-    '🔥 Garantia 60 dias em TODA objeção',
-    '🔥 Kit 3 sempre destacado (R$3,53/dia)',
-    '🔥 Instruções claras de checkout (passo a passo)',
-    '🔧 Removido: explicações longas de bioquímica',
-    '🔧 Mantém: sem nome, neutro, sem link, manual mode, ANVISA'
+  version: '11.0',
+  modelo: 'claude-haiku-4-5-20251001',
+  config: {
+    debounce_ms: DEBOUNCE_MS,
+    max_history: MAX_HISTORY,
+    max_tokens: MAX_TOKENS,
+    manual_mode_min: MANUAL_MODE_DURATION / 60000,
+    prompt_caching: true
+  },
+  changes_from_v10_2: [
+    '🔥 Prompt caching ativado (cache_control: ephemeral)',
+    '🔥 max_tokens 512 → 150',
+    '🔥 Debounce 4s → 7s',
+    '🔥 Sliding window 20 → 12 msgs',
+    '🔥 System prompt reescrito (persona BR, 2 frases máx)',
+    '🔥 Filtro pós-LLM (ademais, contudo, lhe, prezado, etc)',
+    '🔥 Quebra em 2 msgs com delayMessage 2-3s (Z-API simula digitação)',
+    '🔥 Function calling (sinalizar_compra + pedir_atendente_humano)',
+    '🔥 Compliance ANVISA reforçado',
+    '🔥 Promo 5+2 (R$448) destacada — bate com landing v15',
+    '🔥 Persistência em JSON (sobrevive restart)',
+    '🔥 Auto-handoff quando cliente pede atendente humano',
+    '🔧 Mantido: manual mode 30min, tracking gclid, sem nome, sem link'
   ]
 }));
 
+// ========== GRACEFUL SHUTDOWN ==========
+process.on('SIGINT', () => {
+  console.log('\n💾 Salvando conversas antes de fechar...');
+  savePersistedConversations();
+  process.exit(0);
+});
+
+process.on('SIGTERM', () => {
+  savePersistedConversations();
+  process.exit(0);
+});
+
 app.listen(PORT, () => {
   console.log('╔════════════════════════════════════════╗');
-  console.log('║  🤖 CARLOS v10.2 (MODO VENDEDOR)       ║');
-  console.log('║  🔥 VENDE + instrui compra no site     ║');
-  console.log('║  🔥 CTA + Urgência + Garantia          ║');
-  console.log('║  🔥 Máx 3-4 msgs → checkout            ║');
-  console.log('║  🔥 Kit 3 sempre destacado             ║');
-  console.log('║  ✅ Sem nome + Neutro + Sem link       ║');
+  console.log('║  🤖 CARLOS v11.0 (MODO VENDEDOR PRO)   ║');
+  console.log('║  🔥 Prompt Caching (90% economia)      ║');
+  console.log('║  🔥 Max 2 frases, max 150 tokens       ║');
+  console.log('║  🔥 Debounce 7s + Sliding 12 msgs      ║');
+  console.log('║  🔥 Filtro palavras-veneno             ║');
+  console.log('║  🔥 Function calling (CTA + handoff)   ║');
+  console.log('║  🔥 PROMO 5+2 R$448 até 15/06          ║');
   console.log(`║  Porta: ${PORT}                          ║`);
   console.log('╚════════════════════════════════════════╝');
 });
