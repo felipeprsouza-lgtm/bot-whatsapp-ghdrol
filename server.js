@@ -1,18 +1,29 @@
 // ================================================================
-// CARLOS v11.0 — BOT WHATSAPP GHDROL (MODO VENDEDOR PRO)
+// CARLOS v11.1 — BOT WHATSAPP GHDROL (MODO VENDEDOR PRO)
 // ================================================================
-// MELHORIAS v11 vs v10.2:
+// CORREÇÕES v11.1 vs v11.0 (bug que perdia venda quente):
+//   🐛 FIX handoff: pedir_atendente_humano silenciava o bot 30min
+//      em objeções comuns ("é golpe?", "funciona?") e em pergunta
+//      médica, SEM avisar o Felipe. Lead ficava no vácuo.
+//   ✅ Agora notifica o Felipe no WhatsApp quando há handoff real.
+//   ✅ pergunta_medica NÃO silencia mais o bot (ele já tem resposta
+//      de compliance no prompt) — só silencia em pedido explícito,
+//      frustração séria ou reembolso.
+//   ✅ Fallback sabe quando houve handoff: avisa o cliente que vem
+//      atendente, em vez de jogar CTA de venda no vácuo.
+//
+// MELHORIAS herdadas da v11.0:
 //   ✅ Prompt caching (90% economia em hits)
-//   ✅ max_tokens: 150 (era 512) — força respostas curtas
-//   ✅ Debounce 7s (era 4s) — agrupa fragmentação
-//   ✅ Sliding window 12 msgs (era 20) — foco + economia
-//   ✅ System prompt reescrito — persona BR, max 2 frases, gírias OK
-//   ✅ Filtro pós-LLM — remove palavras-veneno (ademais, contudo, etc)
-//   ✅ Quebra em 2 mensagens com delayMessage:2 (Z-API simula digitação)
-//   ✅ Compliance ANVISA reforçado (sem DE, Viagra, testosterona)
-//   ✅ Promo Época Pagamento 5+2 (atualizada da landing v15)
-//   ✅ Function calling: enviar_link_compra + pedir_atendente
-//   ✅ Persistência: salva conversas em JSON a cada N msgs
+//   ✅ max_tokens: 150 — força respostas curtas
+//   ✅ Debounce 7s — agrupa fragmentação
+//   ✅ Sliding window 12 msgs — foco + economia
+//   ✅ System prompt persona BR, max 2 frases
+//   ✅ Filtro pós-LLM — remove palavras-veneno
+//   ✅ Quebra em 2 mensagens com delayMessage (simula digitação)
+//   ✅ Compliance ANVISA reforçado
+//   ✅ Promo Época Pagamento 5+2 (landing v15)
+//   ✅ Function calling: sinalizar_compra + pedir_atendente
+//   ✅ Persistência: salva conversas em JSON
 // ================================================================
 
 const express = require('express');
@@ -42,9 +53,9 @@ const anthropic = new Anthropic({ apiKey: CLAUDE_API_KEY });
 
 // ========== CONFIGS ==========
 const MANUAL_MODE_DURATION = 30 * 60 * 1000;  // 30 min
-const DEBOUNCE_MS = 7000;                     // 7s (era 4s) — relatório
-const MAX_HISTORY = 12;                       // 12 msgs (era 20) — sliding window
-const MAX_TOKENS = 150;                       // era 512 — força resposta curta
+const DEBOUNCE_MS = 7000;                     // 7s
+const MAX_HISTORY = 12;                       // 12 msgs — sliding window
+const MAX_TOKENS = 150;                       // força resposta curta
 const PERSIST_EVERY = 5;                      // salva conversa a cada 5 msgs
 const PERSIST_FILE = path.join(__dirname, 'conversations.json');
 
@@ -59,8 +70,8 @@ const userContext = new Map();
 const ownerManualMode = new Map();
 const recentBotMessages = new Map();
 const messageCount = new Map();
-const ctaSent = new Map();          // NOVO: marca se já mandou link de checkout
-const persistCounter = new Map();   // NOVO: contador pra persistência
+const ctaSent = new Map();
+const persistCounter = new Map();
 
 // ========== PERSISTÊNCIA (JSON LOCAL) ==========
 function loadPersistedConversations() {
@@ -126,14 +137,14 @@ function markBotMessage(phone, message) {
   if (!recentBotMessages.has(phone)) recentBotMessages.set(phone, []);
   const arr = recentBotMessages.get(phone);
   arr.push({ hash: hashMessage(message), ts: Date.now() });
-  if (arr.length > 5) arr.shift();
+  if (arr.length > 8) arr.shift();
 }
 
 function isMessageFromBot(phone, message) {
   const arr = recentBotMessages.get(phone) || [];
   const targetHash = hashMessage(message);
   const agora = Date.now();
-  return arr.some(m => m.hash === targetHash && (agora - m.ts) < 60000);
+  return arr.some(m => m.hash === targetHash && (agora - m.ts) < 120000);
 }
 
 function getMessageCount(phone) {
@@ -195,9 +206,7 @@ setInterval(() => {
 }, 60 * 60 * 1000);
 
 // ========== FILTRO DE PALAVRAS-VENENO (PÓS-LLM) ==========
-// Remove "tom corporativo" que destrói a impressão de humano
 const PALAVRAS_VENENO = {
-  // Formalismo robótico
   'ademais': 'além disso',
   'outrossim': '',
   'contudo': 'mas',
@@ -207,7 +216,6 @@ const PALAVRAS_VENENO = {
   'consoante': 'segundo',
   'destarte': '',
   'doravante': '',
-  // Linguagem corporativa
   'trata-se de': 'é',
   'trata-se': 'é',
   'ressalto que': '',
@@ -217,15 +225,12 @@ const PALAVRAS_VENENO = {
   'caríssimo': '',
   'atenciosamente': '',
   'cordialmente': '',
-  // Pronomes formais
   'lhe ': 'te ',
   'vos ': 'vocês ',
-  // Frases robóticas
   'como posso ajudá-lo': 'como posso ajudar',
   'como posso ajudá-la': 'como posso ajudar',
   'estou à disposição': 'tô aqui',
   'permita-me': '',
-  // Termos médicos proibidos ANVISA (sanity check, prompt já bloqueia)
   'disfunção erétil': 'questão de performance',
   'impotência': 'questão de performance',
   'andropausa': 'queda natural com a idade',
@@ -245,23 +250,19 @@ function filtrarPalavrasVeneno(texto) {
       count++;
     }
   }
-  // Limpa espaços duplos e vírgulas órfãs deixados pelas substituições
   limpo = limpo.replace(/\s+/g, ' ').replace(/\s+,/g, ',').replace(/^\s+|\s+$/g, '');
   if (count > 0) console.log(`   🧼 Filtro: ${count} palavra(s)-veneno removida(s)`);
   return limpo;
 }
 
 // ========== QUEBRAR RESPOSTA EM 2 MSGS (NATURAL) ==========
-// Se a resposta tem 2 frases separadas por "|||" ou for muito longa, quebra
 function quebrarMensagem(texto) {
-  // Marca explícita |||
   if (texto.includes('|||')) {
     return texto.split('|||').map(s => s.trim()).filter(s => s.length > 0);
   }
-  // Auto-quebra: se tem 2 parágrafos (separados por \n\n), quebra
   const paragrafos = texto.split(/\n\n+/).map(s => s.trim()).filter(s => s.length > 0);
   if (paragrafos.length >= 2) {
-    return paragrafos.slice(0, 2); // máx 2 msgs
+    return paragrafos.slice(0, 2);
   }
   return [texto];
 }
@@ -302,6 +303,7 @@ VENDER GHDROL. Empurrar pro checkout no site (preserva rastreio Google Ads). Voc
 - 210 dias de protocolo
 - Frete grátis + 60 dias garantia
 - 12x de R$37,33 sem juros
+- Cupom CLIENTE20 dá 20% OFF no checkout
 
 ⭐ **Alternativa (sem promo):**
 - Kit 3 potes — R$317,90 (R$3,53/dia) — 90 dias — também tem garantia 60 dias
@@ -322,8 +324,9 @@ Se passar de 4 trocas e não fechou, mande:
 "Pra comprar:
 1. Volta na página do GHDROL (a mesma que te trouxe aqui)
 2. Clica no botão 'GARANTIR PROMOÇÃO 5+2 POTES' (lá em cima, em vermelho)
-3. Pix aprova na hora ou 12x sem juros
-4. Frete grátis, chega em até 8 dias úteis
+3. No checkout, aplica o cupom CLIENTE20 pra 20% OFF
+4. Pix aprova na hora ou 12x sem juros
+5. Frete grátis, chega em até 8 dias úteis
 Qualquer dúvida no checkout, me chama aqui."
 
 Se cliente pedir link direto:
@@ -332,7 +335,7 @@ Se cliente pedir link direto:
 # 🛡️ GARANTIA (USE EM TODA OBJEÇÃO)
 "60 dias de garantia incondicional. Se não gostar, devolve e recebe 100% de volta. Risco zero."
 
-# 🚨 OBJEÇÕES (RESPOSTA CURTA + CTA SEMPRE)
+# 🚨 OBJEÇÕES (RESPOSTA CURTA + CTA SEMPRE — NÃO CHAME ATENDENTE PRA ISSO)
 
 "Tá caro":
 "Cara, R$2,13 por dia. Menos que um pão na padaria. E tem 60 dias de garantia — se não rolar, recebe tudo de volta. Volta no site e clica no 5+2."
@@ -340,17 +343,17 @@ Se cliente pedir link direto:
 "Vou pensar":
 "Tranquilo. Só lembra: a promoção 5+2 vai até 15/06. Depois volta a R$447 sem os 2 brindes. O que tá te segurando? Preço ou dúvida do produto?"
 
-"Funciona mesmo?":
-"Funciona pra quem treina e come direito. Tem cliente nosso com print depois de 3 semanas — diferença real. Quer dar uma olhada nos depoimentos antes de decidir?"
+"Funciona mesmo?" / "Não é golpe?":
+"Funciona pra quem treina e come direito. Tem cliente nosso com print depois de 3 semanas — diferença real. E olha: 60 dias de garantia, se não curtir devolve e recebe tudo. Quer dar uma olhada nos depoimentos?"
 
 "Já usei outro e não rolou":
 "Geralmente é falta de protocolo. GHDROL vem com o protocolo completo na página (dieta + treino). Volta lá, pega o 5+2 e segue. Com 60 dias de garantia."
 
 "É natural?":
-"100% natural. Suplemento registrado, sem hormônio sintético. Não afeta fígado nem próstata."
+"100% natural. Suplemento alimentar, sem hormônio sintético. Não afeta fígado nem próstata."
 
 "Quero falar com humano":
-"Beleza, vou avisar a equipe. Pode adiantar o que cê quer saber que já anoto pra agilizar."
+"Beleza, vou avisar a equipe agora. Pode adiantar o que cê quer saber que já anoto pra agilizar."
 
 # ⚠️ COMPLIANCE ANVISA (INVIOLÁVEL)
 
@@ -360,20 +363,20 @@ NUNCA garanta resultado em X dias específicos de forma absoluta.
 
 USE: "apoia", "auxilia", "contribui pra", "quem tem deficiência costuma sentir diferença", "suplemento alimentar", "vitalidade", "disposição", "performance".
 
-Se cliente perguntar sobre disfunção erétil/impotência:
+Se cliente perguntar sobre disfunção erétil/impotência (responda você mesmo, NÃO chame atendente):
 "Cara, pra questão clínica o ideal é falar com urologista. GHDROL é suplemento pra disposição e vitalidade, não substitui consulta. Mas pra um up no dia a dia, entrega bem."
 
-Se perguntar se aumenta testosterona:
+Se perguntar se aumenta testosterona (responda você mesmo):
 "Sem hormônio. Tem zinco, boro e vitamina D que apoiam o metabolismo natural. Quem tem deficiência costuma sentir diferença em 2-4 semanas. E cê testa com 60 dias de garantia."
 
 # 🛡️ TRIAGEM RÁPIDA (UMA VEZ SÓ)
 Pergunte de leve UMA vez:
 "Antes de te orientar — cê toma algum remédio contínuo ou tem pressão alta, diabetes ou problema no coração?"
 
-RECUSE só se: nitrato (Monocordil/Isordil), Viagra/Cialis contínuo, infarto recente, insuficiência renal/hepática grave, menor de 18, gestante/lactante.
+Se a pessoa tem condição séria (cardiopatia, usa nitrato tipo Monocordil/Isordil, Viagra/Cialis contínuo, infarto recente, insuficiência renal/hepática grave, menor de 18, gestante/lactante): oriente procurar o médico ANTES e peça atendente humano.
 
-Frase de recusa:
-"Nesse caso, melhor seu médico liberar antes. Quando ele autorizar, me chama de volta."
+Frase nesse caso:
+"Nesse caso, melhor seu médico liberar antes de começar. Vou pedir pra alguém da equipe te dar uma atenção, tá? Quando o médico autorizar, é só chamar."
 
 Se "não tomo nada" ou leve: segue pra venda direto.
 
@@ -388,11 +391,11 @@ Carlos: "Tá rolando a promoção época pagamento: 5 potes + 2 BRINDES por R$44
 Cliente: "tá caro"
 Carlos: "Saquei. Mas pensa: R$2,13 por dia, menos que um pão. E se não gostar nos 60 dias, devolve e recebe tudo de volta. Risco zero, vale testar."
 
-Cliente: "vou pensar"
-Carlos: "Tranquilo. Só lembra: a promoção 5+2 vai até 15/06. Depois volta a R$447 sem os 2 brindes. O que tá te segurando — é o valor ou dúvida se funciona?"
+Cliente: "não é golpe não né"
+Carlos: "Entendo a cautela. É site oficial, checkout seguro e 60 dias de garantia — se não curtir, devolve e recebe 100% de volta. Risco zero do seu lado. Quer ver os depoimentos antes?"
 
 Cliente: "como compro?"
-Carlos: "Volta na página do GHDROL (mesma que te trouxe aqui). Clica em 'GARANTIR PROMOÇÃO 5+2' lá em cima. Pix aprova na hora ou 12x sem juros. Qualquer travada no checkout, me chama."
+Carlos: "Volta na página do GHDROL (mesma que te trouxe aqui). Clica em 'GARANTIR PROMOÇÃO 5+2' lá em cima. No checkout aplica o cupom CLIENTE20 pra 20% OFF. Pix aprova na hora. Qualquer travada, me chama."
 
 Cliente: "tem disfunção erétil, resolve?"
 Carlos: "Cara, pra questão clínica o ideal é falar com urologista, viu? GHDROL é suplemento pra disposição e vitalidade, não substitui consulta. Mas se cê quer um up no dia a dia, ele entrega 💪"
@@ -403,6 +406,7 @@ Carlos: "Cara, pra questão clínica o ideal é falar com urologista, viu? GHDRO
 3. Terminou com pergunta ou CTA?
 4. Sem palavras-veneno (ademais, contudo, trata-se, prezado)?
 5. Sem prometer cura ou DE/impotência?
+6. Objeção comum (golpe/funciona/caro) eu RESPONDO — não chamo atendente.
 
 # 🎯 META
 Cada mensagem aproxima do checkout. Você é vendedor que fecha — venda com honestidade.`;
@@ -431,13 +435,13 @@ const TOOLS = [
   },
   {
     name: 'pedir_atendente_humano',
-    description: 'Use quando o cliente pedir explicitamente atendente humano, OU demonstrar frustração séria (palavras como "golpe", "absurdo", "vou denunciar"), OU fizer pergunta médica específica que exige especialista.',
+    description: 'Use APENAS quando o cliente pedir EXPLICITAMENTE falar com humano/atendente, OU demonstrar frustração séria real (palavras como "golpe comprovado", "vou processar", "vou denunciar", "me roubaram"), OU pedir reembolso, OU declarar condição de saúde séria (cardiopatia, nitrato, gestante, menor). NÃO use para objeções normais de venda como "é caro", "vou pensar", "funciona mesmo?", "não é golpe né?" — essas você mesmo responde. NÃO use para pergunta médica genérica que o prompt já manda responder (ex: disfunção erétil, se aumenta testosterona).',
     input_schema: {
       type: 'object',
       properties: {
         motivo: {
           type: 'string',
-          enum: ['solicitacao_explicita', 'frustracao', 'pergunta_medica', 'reembolso', 'outro'],
+          enum: ['solicitacao_explicita', 'frustracao', 'reembolso', 'condicao_saude_seria', 'outro'],
           description: 'Por que precisa de humano'
         }
       },
@@ -453,7 +457,6 @@ async function callClaude(phone, userMessage) {
   const history = getHistory(phone);
   const count = getMessageCount(phone);
 
-  // Alerta de ritmo após 4 trocas
   let systemPrompt = SYSTEM_PROMPT;
   if (count >= 4) {
     systemPrompt += `\n\n# ⚠️ ALERTA RITMO\nEsta conversa já tem ${count}+ trocas. PARA de explicar e MANDA o cliente pro site AGORA. Mensagem firme: "Volta na página e clica no 5+2". Não responde mais dúvida técnica.`;
@@ -464,7 +467,6 @@ async function callClaude(phone, userMessage) {
       setTimeout(() => reject(new Error('Claude timeout 15s')), 15000)
     );
 
-    // PROMPT CACHING: cache_control no system prompt (90% economia em hits)
     const claudePromise = anthropic.messages.create({
       model: 'claude-haiku-4-5-20251001',
       max_tokens: MAX_TOKENS,
@@ -486,12 +488,37 @@ async function callClaude(phone, userMessage) {
     if (toolUses.length > 0) {
       for (const tool of toolUses) {
         console.log(`   🔧 Tool: ${tool.name}`, tool.input);
+
         if (tool.name === 'sinalizar_intencao_compra') {
           ctaSent.set(phone, { ...tool.input, ts: Date.now() });
+
         } else if (tool.name === 'pedir_atendente_humano') {
-          // Pausa bot, avisa Felipe
-          activateManualMode(phone, `auto_atendente_${tool.input.motivo}`);
-          console.log(`   👤 Cliente pediu humano (${tool.input.motivo}) → manual mode`);
+          const motivo = tool.input.motivo;
+          // ───────────────────────────────────────────────────────────
+          // FIX v11.1: só silencia o bot em handoff REAL.
+          // Objeção comum e pergunta médica genérica NÃO entram aqui
+          // (o prompt já manda o Carlos responder). Antes, qualquer
+          // "frustração" detectada matava a conversa 30min sem avisar.
+          // ───────────────────────────────────────────────────────────
+          const handoffReal = ['solicitacao_explicita', 'frustracao', 'reembolso', 'condicao_saude_seria'].includes(motivo);
+
+          if (handoffReal) {
+            activateManualMode(phone, `auto_atendente_${motivo}`);
+            // FIX v11.1: AVISA O FELIPE NO WHATSAPP (isto faltava — por
+            // isso os leads ficavam pendurados sem você saber).
+            try {
+              await sendZapiMessage(
+                OWNER_NUMBER,
+                `🔔 LEAD PRECISA DE VOCÊ\nCliente: ${phone}\nMotivo: ${motivo}\nO bot foi pausado por 30 min. Responda esse número direto no WhatsApp.`,
+                0
+              );
+            } catch (e) {
+              console.error('   ⚠️  Falha ao notificar owner:', e.message);
+            }
+            console.log(`   👤 Handoff REAL (${motivo}) → manual mode + Felipe avisado`);
+          } else {
+            console.log(`   ℹ️  Tool pedir_atendente (${motivo}) — bot SEGUE respondendo (sem silenciar)`);
+          }
         }
       }
     }
@@ -502,6 +529,13 @@ async function callClaude(phone, userMessage) {
 
     if (!reply) {
       console.log('   ⚠️  Sem texto na resposta, usando fallback');
+      // FIX v11.1: se acabou de entrar em manual mode (handoff real),
+      // avisa o cliente que vem atendente — NÃO joga CTA de venda no vácuo.
+      if (isOwnerInManualMode(phone)) {
+        const msg = 'Boa, vou chamar alguém da equipe aqui pra te atender direitinho. Só um instante que já te respondem 🙂';
+        addToHistory(phone, 'assistant', msg);
+        return msg;
+      }
       return 'Volta no site e clica em "GARANTIR PROMOÇÃO 5+2 POTES" lá em cima. Qualquer dúvida no checkout, me chama aqui. 🙂';
     }
 
@@ -509,7 +543,6 @@ async function callClaude(phone, userMessage) {
     incrementMessageCount(phone);
     maybePersist(phone);
 
-    // Log de tokens (incluindo cache)
     const u = response.usage;
     const cacheInfo = u.cache_read_input_tokens
       ? ` | cache_read=${u.cache_read_input_tokens}`
@@ -552,20 +585,14 @@ async function sendZapiMessage(phone, message, delayMessage = 2) {
 
 // ========== PROCESSAR RESPOSTA (FILTRO + QUEBRA + ENVIO) ==========
 async function processarResposta(phone, reply) {
-  // 1. Filtro de palavras-veneno
   const limpo = filtrarPalavrasVeneno(reply);
-
-  // 2. Quebra em até 2 mensagens (natural)
   const partes = quebrarMensagem(limpo);
 
-  // 3. Envia cada parte com delayMessage (Z-API simula digitação)
   for (let i = 0; i < partes.length; i++) {
     const parte = partes[i];
     if (!parte || parte.length === 0) continue;
-    // Primeira msg: delay 2s; segunda: delay 3s (mais natural)
     const delay = i === 0 ? 2 : 3;
     await sendZapiMessage(phone, parte, delay);
-    // Pequeno aguardo entre mensagens locais (Z-API já delay nas duas pontas)
     if (i < partes.length - 1) await new Promise(r => setTimeout(r, 1500));
   }
 }
@@ -604,9 +631,9 @@ async function flushBuffer(phone) {
 
   if (processingUser.get(phone)) {
     console.log(`⏳ Já processando ${phone}, reagendando...`);
-    setTimeout(() => flushBuffer(phone), 2000);
     const currentBuffer = messageBuffer.get(phone) || [];
     messageBuffer.set(phone, [combined, ...currentBuffer]);
+    setTimeout(() => flushBuffer(phone), 2000);
     return;
   }
 
@@ -641,7 +668,7 @@ app.post('/webhook', async (req, res) => {
   try {
     const data = req.body;
 
-    // fromMe = mensagem enviada do número conectado (Felipe digitando no celular)
+    // fromMe = mensagem enviada do número conectado
     if (data.fromMe) {
       const targetPhone = data.phone;
       const messageText = data.text?.message || data.text || '';
@@ -698,22 +725,15 @@ app.post('/webhook', async (req, res) => {
 // ========== ROUTES ==========
 app.get('/', (req, res) => res.json({
   status: 'online',
-  version: '11.0',
+  version: '11.1',
   bot: 'Carlos GHDROL (MODO VENDEDOR PRO)',
-  improvements_from_v10_2: [
-    '✅ Prompt caching (90% economia em hits)',
-    '✅ max_tokens: 150 (era 512)',
-    '✅ Debounce 7s (era 4s)',
-    '✅ Sliding window 12 msgs (era 20)',
-    '✅ System prompt reescrito (persona BR, max 2 frases)',
-    '✅ Filtro pós-LLM (palavras-veneno: ademais, contudo, etc)',
-    '✅ Quebra em 2 mensagens com delayMessage (simula digitação)',
-    '✅ Compliance ANVISA reforçado (DE, Viagra, testosterona)',
-    '✅ Promo Época Pagamento 5+2 (atualizada da landing v15)',
-    '✅ Function calling: sinalizar_compra + pedir_atendente',
-    '✅ Persistência em JSON local (sobrevive a restart)'
+  fixes_v11_1: [
+    '🐛 Handoff não silencia mais o bot em objeção comum/pergunta médica',
+    '🔔 Felipe é avisado no WhatsApp quando há handoff real',
+    '🙂 Fallback avisa o cliente que vem atendente (não joga CTA no vácuo)',
+    '🔧 Janela anti-eco fromMe 60s→120s e buffer 5→8 (menos falso manual mode)'
   ],
-  kit_destaque: 'PROMO 5+2 — R$448 (R$2,13/dia) — até 15/06',
+  kit_destaque: 'PROMO 5+2 — R$448 (R$2,13/dia) — até 15/06 — cupom CLIENTE20',
   stats: {
     conversas: conversationMemory.size,
     processando: processingUser.size,
@@ -725,7 +745,7 @@ app.get('/', (req, res) => res.json({
 
 app.get('/health', (req, res) => {
   const healthy = !!(ZAPI_KEY && ZAPI_INSTANCE && ZAPI_CLIENT_TOKEN && CLAUDE_API_KEY);
-  res.json({ status: healthy ? 'healthy' : 'unhealthy', version: '11.0' });
+  res.json({ status: healthy ? 'healthy' : 'unhealthy', version: '11.1' });
 });
 
 app.get('/stats', (req, res) => res.json({
@@ -792,7 +812,6 @@ app.get('/manual-list', (req, res) => {
 });
 
 app.get('/intencoes', (req, res) => {
-  // Lista clientes que sinalizaram intenção de compra (alta prioridade pra follow-up)
   const list = Array.from(ctaSent.entries())
     .map(([phone, data]) => ({
       phone,
@@ -806,7 +825,7 @@ app.get('/intencoes', (req, res) => {
 });
 
 app.get('/version', (req, res) => res.json({
-  version: '11.0',
+  version: '11.1',
   modelo: 'claude-haiku-4-5-20251001',
   config: {
     debounce_ms: DEBOUNCE_MS,
@@ -815,20 +834,14 @@ app.get('/version', (req, res) => res.json({
     manual_mode_min: MANUAL_MODE_DURATION / 60000,
     prompt_caching: true
   },
-  changes_from_v10_2: [
-    '🔥 Prompt caching ativado (cache_control: ephemeral)',
-    '🔥 max_tokens 512 → 150',
-    '🔥 Debounce 4s → 7s',
-    '🔥 Sliding window 20 → 12 msgs',
-    '🔥 System prompt reescrito (persona BR, 2 frases máx)',
-    '🔥 Filtro pós-LLM (ademais, contudo, lhe, prezado, etc)',
-    '🔥 Quebra em 2 msgs com delayMessage 2-3s (Z-API simula digitação)',
-    '🔥 Function calling (sinalizar_compra + pedir_atendente_humano)',
-    '🔥 Compliance ANVISA reforçado',
-    '🔥 Promo 5+2 (R$448) destacada — bate com landing v15',
-    '🔥 Persistência em JSON (sobrevive restart)',
-    '🔥 Auto-handoff quando cliente pede atendente humano',
-    '🔧 Mantido: manual mode 30min, tracking gclid, sem nome, sem link'
+  changes_from_v11_0: [
+    '🐛 FIX: pedir_atendente_humano não silencia mais o bot em objeção comum',
+    '🐛 FIX: pergunta médica genérica não dispara handoff (bot responde)',
+    '🔔 NOVO: notifica Felipe no WhatsApp quando há handoff real',
+    '🙂 NOVO: fallback de handoff avisa o cliente que vem atendente',
+    '🔧 Anti-eco fromMe: janela 60s→120s, buffer 5→8 (menos falso manual mode)',
+    '🔧 Reordenado reagendamento do flushBuffer (re-enfileira antes de reagendar)',
+    '🛒 Cupom CLIENTE20 incluído nas instruções de compra'
   ]
 }));
 
@@ -846,13 +859,11 @@ process.on('SIGTERM', () => {
 
 app.listen(PORT, () => {
   console.log('╔════════════════════════════════════════╗');
-  console.log('║  🤖 CARLOS v11.0 (MODO VENDEDOR PRO)   ║');
-  console.log('║  🔥 Prompt Caching (90% economia)      ║');
-  console.log('║  🔥 Max 2 frases, max 150 tokens       ║');
-  console.log('║  🔥 Debounce 7s + Sliding 12 msgs      ║');
-  console.log('║  🔥 Filtro palavras-veneno             ║');
-  console.log('║  🔥 Function calling (CTA + handoff)   ║');
-  console.log('║  🔥 PROMO 5+2 R$448 até 15/06          ║');
+  console.log('║  🤖 CARLOS v11.1 (MODO VENDEDOR PRO)   ║');
+  console.log('║  🐛 FIX handoff que perdia venda quente║');
+  console.log('║  🔔 Avisa Felipe no WhatsApp           ║');
+  console.log('║  🔥 Prompt Caching + max 2 frases      ║');
+  console.log('║  🔥 PROMO 5+2 R$448 + cupom CLIENTE20  ║');
   console.log(`║  Porta: ${PORT}                          ║`);
   console.log('╚════════════════════════════════════════╝');
 });
