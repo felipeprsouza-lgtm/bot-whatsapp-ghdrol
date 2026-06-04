@@ -477,8 +477,7 @@ async function callClaude(phone, userMessage) {
         cache_control: { type: 'ephemeral' }
       }],
       messages: history,
-      tools: TOOLS,
-      stop_sequences: ['\n\n\n']
+      tools: TOOLS
     });
 
     const response = await Promise.race([claudePromise, timeoutPromise]);
